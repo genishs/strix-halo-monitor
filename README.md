@@ -34,6 +34,13 @@ bash monitor.sh
 
 별도 터미널에 띄워두고 학습/채점 잡을 systemd `--user`로 돌리면 자동으로 감지해 보여준다. 종료는 `Ctrl-C`.
 
+기본 언어는 한국어다. 대시보드 UI를 영어로 보려면:
+
+```bash
+bash monitor.sh --english     # 짧게는 -e
+HALO_LANG=en bash monitor.sh  # 환경변수로도 지정 가능 (인자가 우선)
+```
+
 ## 설정 (환경변수)
 
 `monitor.sh` 상단 CONFIG 블록에서 아래 환경변수로 기본값을 덮어쓸 수 있다.
@@ -45,6 +52,7 @@ bash monitor.sh
 | `HALO_TITLE` | `TITLE` | `Strix Halo Train/Score Monitor` | 대시보드 제목줄에 표시할 이름 |
 | `HALO_POOL_GB` | `POOL_GB` | `60` | 통합메모리 풀 안내치(GB) — 경고 문구 계산용. 실제 총량은 sysfs에서 읽음 |
 | `HALO_HELDOUT_TOTAL` | `HELDOUT_TOTAL` | `7` | 채점 시 heldout 태스크 총 개수 (진행률 표시용) |
+| `HALO_LANG` | `LANG_MODE` | `ko` | 대시보드 UI 언어. `ko`(기본) 또는 `en`. `--english`/`-e` 인자를 주면 이 값보다 우선 적용됨 |
 
 예:
 
@@ -68,6 +76,9 @@ HALO_LOG_DIR=/data/logs HALO_UNIT_GLOB="myjob-*" HALO_TITLE="My GPU Box" bash mo
    sclk: 2100Mhz      유닛: active
 ╚═══════════════════════════════ 14:32:07 · Ctrl-C 종료 ═══════════════════════════════╝
 ```
+
+`--english`로 실행하면 라벨이 영어로 바뀐다 (예: `진행:` → `Progress:`, `모델:` → `Model:`, `통합메모리` →
+`Unified Memory`). 값·기호는 동일하다.
 
 ## 한계 / 주의
 
@@ -126,6 +137,13 @@ bash monitor.sh
 Run it in its own terminal alongside a training/scoring job running as a systemd `--user` unit; it auto-detects
 the running unit. Exit with `Ctrl-C`.
 
+The dashboard defaults to Korean. To switch the UI to English:
+
+```bash
+bash monitor.sh --english     # or -e
+HALO_LANG=en bash monitor.sh  # or via env var (the flag takes precedence)
+```
+
 ## Configuration (environment variables)
 
 These override the defaults in the CONFIG block at the top of `monitor.sh`.
@@ -137,6 +155,7 @@ These override the defaults in the CONFIG block at the top of `monitor.sh`.
 | `HALO_TITLE` | `TITLE` | `Strix Halo Train/Score Monitor` | Title shown in the dashboard header |
 | `HALO_POOL_GB` | `POOL_GB` | `60` | Advisory unified-memory pool size (GB) used for the warning text; actual total is read from sysfs |
 | `HALO_HELDOUT_TOTAL` | `HELDOUT_TOTAL` | `7` | Total number of heldout scoring tasks (used for progress display) |
+| `HALO_LANG` | `LANG_MODE` | `ko` | Dashboard UI language: `ko` (default) or `en`. The `--english`/`-e` flag overrides this if both are set |
 
 Example:
 
@@ -161,7 +180,8 @@ HALO_LOG_DIR=/data/logs HALO_UNIT_GLOB="myjob-*" HALO_TITLE="My GPU Box" bash mo
 ╚═══════════════════════════════ 14:32:07 · Ctrl-C 종료 ═══════════════════════════════╝
 ```
 
-(Dashboard text itself is Korean; the layout/values are what matters for non-Korean readers.)
+(Dashboard text above is Korean, the default. Run with `--english`/`-e` or `HALO_LANG=en` for an English UI —
+e.g. `Progress:`, `Elapsed:`, `Model:`, `Unified Memory`, `Power · GPU` — same values and layout.)
 
 ## Limitations / caveats
 

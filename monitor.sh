@@ -35,6 +35,19 @@ POOL_GB="${HALO_POOL_GB:-60}"                           # 통합메모리 풀 �
 HELDOUT_TOTAL="${HALO_HELDOUT_TOTAL:-7}"                # 채점 heldout 태스크 총 개수
 # ─────────────────────────────────────────────────────────────────────────
 
+# ── 언어 모드: 기본 한국어. HALO_LANG=en 환경변수 또는 --english/-e 인자로 영어 전환.
+#    (인자가 환경변수보다 우선) ──────────────────────────────────────────
+LANG_MODE="ko"
+[ "${HALO_LANG:-ko}" = "en" ] && LANG_MODE="en"
+for _arg in "$@"; do
+  case "$_arg" in
+    --english|-e) LANG_MODE="en";;
+  esac
+done
+# t "한국어 문자열" "English string" — LANG_MODE에 따라 둘 중 하나를 골라 출력하는 국제화 헬퍼
+t(){ if [ "$LANG_MODE" = "en" ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+# ─────────────────────────────────────────────────────────────────────────
+
 # base 모델 디렉토리명 → 표시용 라벨 매핑.
 # 여기에 매핑 추가: 아래 case에 `패턴) "라벨";;` 한 줄만 추가하면 됨.
 # 매핑이 없으면 디렉토리명(basename) 그대로 표시하니, 매핑을 안 넣어도 동작은 함.
@@ -94,7 +107,7 @@ while true; do
   addpart "$base_label"
   [ -n "$nbits" ] && addpart "HQQ ${nbits}bit"
   if [ "$is_score" = "1" ]; then
-    [ -n "$adapter_bn" ] && addpart "어댑터 ${adapter_bn}"
+    [ -n "$adapter_bn" ] && addpart "$(t "어댑터" "adapter") ${adapter_bn}"
     if [ -n "$heldoutv" ]; then
       if [ -n "$maxnew" ]; then addpart "heldout mn${maxnew}"; else addpart "heldout"; fi
     fi
@@ -115,7 +128,7 @@ while true; do
   cur=$(grep -oE 'step [0-9]+ \|' "$LOG" 2>/dev/null | tail -1 | grep -oE '[0-9]+')
   sstep=$(grep -oE '[0-9.]+s/step' "$LOG" 2>/dev/null | tail -1 | grep -oE '[0-9.]+')
   loss=$(grep -oE 'loss\(avg8\) [0-9.]+' "$LOG" 2>/dev/null | tail -1 | grep -oE '[0-9.]+')
-  phase="대기 중"; eta="—"; donetime="—"
+  phase="$(t "대기 중" "idle")"; eta="—"; donetime="—"
   if [ "$is_score" = "1" ]; then
     # 채점: 양자화(재사용 quant) → heldout N개 생성 → (재채점 파이프라인은 이 유닛 밖에서 진행될 수 있음)
     replaced=$(grep -c 'HQQ 스트리밍 치환 완료' "$LOG" 2>/dev/null); replaced=${replaced:-0}
@@ -123,43 +136,43 @@ while true; do
     last_gen=$(grep -oE 'generated \[.*' "$LOG" 2>/dev/null | tail -1)
     if [ "$active" != "active" ]; then
       res=$(systemctl --user show "$unit.service" -p Result --value 2>/dev/null)
-      phase="⏸ 채점 종료 ($active/$res)"
+      phase="$(t "⏸ 채점 종료 ($active/$res)" "⏸ Scoring finished ($active/$res)")"
     elif [ "$replaced" -eq 0 ] && [ "$gen_done" -eq 0 ] && [ -n "$quant" ]; then
-      phase="🔧 채점준비: 양자화 $quant"
-      eta="채점 전 준비단계"
+      phase="$(t "🔧 채점준비: 양자화 $quant" "🔧 Scoring prep: quantizing $quant")"
+      eta="$(t "채점 전 준비단계" "pre-scoring prep")"
     else
-      phase="🧮 채점 ${smodel} — 생성 ${gen_done}/${HELDOUT_TOTAL}, 최근: ${last_gen:-대기중}"
+      phase="$(t "🧮 채점 ${smodel} — 생성 ${gen_done}/${HELDOUT_TOTAL}, 최근: ${last_gen:-대기중}" "🧮 Scoring ${smodel} — generated ${gen_done}/${HELDOUT_TOTAL}, last: ${last_gen:-waiting}")"
       if [ "$gen_done" -ge 1 ] && [ -n "$start" ] && [ "$start" -gt 0 ] 2>/dev/null; then
         el=$(( $(date +%s) - start ))
         rem=$(( el * (HELDOUT_TOTAL - gen_done) / gen_done ))   # 남은태스크 × (경과/완료태스크) — 선형 외삽, 대략값
-        eta="$(hms $rem)  대략(태스크 편차 큼)"
+        eta="$(hms $rem)  $(t "대략(태스크 편차 큼)" "rough (high task variance)")"
         donetime=$(date -d "+$rem seconds" '+%H:%M' 2>/dev/null)
       else
-        eta="첫 태스크 생성 중 — 산정 대기"; donetime="—"
+        eta="$(t "첫 태스크 생성 중 — 산정 대기" "generating first task — estimating")"; donetime="—"
       fi
     fi
   elif [ -n "$cur" ] && [ -n "$total" ] && [ "$cur" -ge "$total" ] && [ "$active" = "active" ]; then
     # 마지막 스텝 끝났는데 유닛 살아있음 = 평가(val loss)/저장 중 (무로깅, GPU 100%)
-    phase="💾 평가·저장 중  (step $cur/$total 완료, val loss 계산 후 어댑터 저장)"
-    eta="스텝 카운트 밖 (몇 분 소요)"
+    phase="$(t "💾 평가·저장 중  (step $cur/$total 완료, val loss 계산 후 어댑터 저장)" "💾 Eval·save (step $cur/$total done, val loss then adapter save)")"
+    eta="$(t "스텝 카운트 밖 (몇 분 소요)" "beyond step count (a few min)")"
   elif [ -n "$cur" ] && [ -n "$total" ]; then
-    phase="🏃 학습  step $cur/$total   loss $loss   ${sstep}s/step"
+    phase="$(t "🏃 학습  step $cur/$total   loss $loss   ${sstep}s/step" "🏃 Training step $cur/$total loss $loss ${sstep}s/step")"
     if [ -n "$sstep" ]; then
       rem=$(awk "BEGIN{printf \"%d\", ($total-$cur)*$sstep}")
       eta=$(hms $rem); donetime=$(date -d "+$rem seconds" '+%H:%M')
     fi
   elif [ -n "$total" ]; then
     # optim_steps 마커는 떴는데 step 라인이 아직 없음 = 양자화 끝나고 첫 스텝 연산 중
-    phase="⚙️ 첫 스텝 연산 중  (양자화 완료, step 1 forward/backward)"
-    eta="첫 스텝은 워밍업 포함 ~8분"
+    phase="$(t "⚙️ 첫 스텝 연산 중  (양자화 완료, step 1 forward/backward)" "⚙️ Computing first step (quant done, step 1 fwd/bwd)")"
+    eta="$(t "첫 스텝은 워밍업 포함 ~8분" "first step incl. warmup ~8min")"
   elif [ -n "$quant" ]; then
     qc=${quant%%/*}; qt=$(echo "$quant"|grep -oE '/[0-9]+'|tr -d '/')
     qpct=$(awk "BEGIN{printf \"%.0f\", $qc/$qt*100}")
-    phase="🔧 양자화  $quant  (${qpct}%)"
-    eta="학습 전 준비단계"
+    phase="$(t "🔧 양자화  $quant  (${qpct}%)" "🔧 Quantizing $quant (${qpct}%)")"
+    eta="$(t "학습 전 준비단계" "pre-training prep")"
   elif [ "$active" != "active" ]; then
     res=$(systemctl --user show "$unit.service" -p Result --value 2>/dev/null)
-    phase="⏸ 종료 ($active/$res)"
+    phase="$(t "⏸ 종료 ($active/$res)" "⏸ Finished ($active/$res)")"
   fi
   err=$(grep -icE 'Traceback|hipError|unspecified launch|out of memory|Killed|device wedged' "$LOG" 2>/dev/null)
   now2=$(date +%s); dt=$((now2-prev_t)); [ "$dt" -lt 1 ] && dt=1
@@ -178,19 +191,20 @@ while true; do
   fi
   filled=$((pct/5)); [ "$filled" -gt 20 ] && filled=20
   bar=$(printf '█%.0s' $(seq 1 $filled 2>/dev/null))$(printf '░%.0s' $(seq 1 $((20-filled)) 2>/dev/null))
-  ramflag=$(awk "BEGIN{print ($ram<3)?\"⚠️위험\":\"✓\"}")
+  ramlow=$(t "위험" "LOW")
+  ramflag=$(awk -v low="⚠️$ramlow" "BEGIN{print ($ram<3)?low:\"✓\"}")
   clear
   echo "╔══════════════════ $TITLE (gfx1151) ══════════════════╗"
-  printf "  진행:  %s\n" "$phase"
-  printf "  경과:  %-14s   완료예상: %s (남은 %s)     오류: %s\n" "$elapsed" "$donetime" "$eta" "$err"
-  printf "  모델:  %s\n" "${model_line:-?}"
-  echo   "  ──────────────────────────────── 통합메모리 ────────────────────────────────"
-  printf "  ★GTT(모델):  %5s / %sGB  [%s] %s%%   증가 %s MB/s\n" "$gttg" "$gttmaxg" "$bar" "$pct" "$rate"
-  printf "   전용VRAM:   %5sGB (nvtop이 보는 값)     통합풀 ~%sGB (GTT+host 이 안이어야 안전)\n" "$vramg" "$POOL_GB"
-  printf "   host RAM여유: %sGB %s     swap: %sGB\n" "$ram" "$ramflag" "$swap"
-  echo   "  ─────────────────────────────── 전력 · GPU ─────────────────────────────────"
-  printf "   ★전력:  CPU %3sW  │  GPU %3sW  │  전체 %3sW    (GPU=전체−CPU 근사, RAPL)\n" "$cpuW" "$gpuW" "$totW"
-  printf "   sclk: %sMhz      유닛: %s\n" "${sclk:-?}" "$active"
-  echo "╚═══════════════════════════════ %s · Ctrl-C 종료 ═══════════════════════════════╝" | sed "s/%s/$(date '+%H:%M:%S')/"
+  printf "  %s:  %s\n" "$(t "진행" "Progress")" "$phase"
+  printf "  %s:  %-14s   %s: %s (%s %s)     %s: %s\n" "$(t "경과" "Elapsed")" "$elapsed" "$(t "완료예상" "ETA")" "$donetime" "$(t "남은" "remaining")" "$eta" "$(t "오류" "errors")" "$err"
+  printf "  %s:  %s\n" "$(t "모델" "Model")" "${model_line:-?}"
+  echo   "  ──────────────────────────────── $(t "통합메모리" "Unified Memory") ────────────────────────────────"
+  printf "  ★%s:  %5s / %sGB  [%s] %s%%   %s %s MB/s\n" "$(t "GTT(모델)" "GTT(model)")" "$gttg" "$gttmaxg" "$bar" "$pct" "$(t "증가" "rate")" "$rate"
+  printf "   %s:   %5sGB %s     %s\n" "$(t "전용VRAM" "VRAM(ded.)")" "$vramg" "$(t "(nvtop이 보는 값)" "(what nvtop sees)")" "$(t "통합풀 ~${POOL_GB}GB (GTT+host 이 안이어야 안전)" "unified pool ~${POOL_GB}GB (GTT+host must fit)")"
+  printf "   %s: %sGB %s     swap: %sGB\n" "$(t "host RAM여유" "host RAM free")" "$ram" "$ramflag" "$swap"
+  echo   "  ─────────────────────────────── $(t "전력 · GPU" "Power · GPU") ─────────────────────────────────"
+  printf "   ★%s:  CPU %3sW  │  GPU %3sW  │  %s %3sW    %s\n" "$(t "전력" "Power")" "$cpuW" "$gpuW" "$(t "전체" "Total")" "$totW" "$(t "(GPU=전체−CPU 근사, RAPL)" "(GPU=Total−CPU approx, RAPL)")"
+  printf "   sclk: %sMhz      %s: %s\n" "${sclk:-?}" "$(t "유닛" "unit")" "$active"
+  echo "╚═══════════════════════════════ %s · $(t "Ctrl-C 종료" "Ctrl-C to quit") ═══════════════════════════════╝" | sed "s/%s/$(date '+%H:%M:%S')/"
   sleep 2
 done
