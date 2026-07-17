@@ -129,7 +129,14 @@ while true; do
       eta="채점 전 준비단계"
     else
       phase="🧮 채점 ${smodel} — 생성 ${gen_done}/${HELDOUT_TOTAL}, 최근: ${last_gen:-대기중}"
-      eta="일부 태스크는 생성에 수시간 걸릴 수 있음, 다음 태스크 생성 중"
+      if [ "$gen_done" -ge 1 ] && [ -n "$start" ] && [ "$start" -gt 0 ] 2>/dev/null; then
+        el=$(( $(date +%s) - start ))
+        rem=$(( el * (HELDOUT_TOTAL - gen_done) / gen_done ))   # 남은태스크 × (경과/완료태스크) — 선형 외삽, 대략값
+        eta="$(hms $rem)  대략(태스크 편차 큼)"
+        donetime=$(date -d "+$rem seconds" '+%H:%M' 2>/dev/null)
+      else
+        eta="첫 태스크 생성 중 — 산정 대기"; donetime="—"
+      fi
     fi
   elif [ -n "$cur" ] && [ -n "$total" ] && [ "$cur" -ge "$total" ] && [ "$active" = "active" ]; then
     # 마지막 스텝 끝났는데 유닛 살아있음 = 평가(val loss)/저장 중 (무로깅, GPU 100%)
