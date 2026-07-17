@@ -1,0 +1,11 @@
+# logs
+*.log
+
+# editor swap/backup files
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db
