@@ -1,0 +1,4 @@
+command python eval_hard_tsc.py --base /models/qwen2.5-coder-32b --hqq-nbits 4 --adapter /adapters/coder32b-lora-v3 --heldout --max-new 512
+[init] loading base model shards ...
+1/616 Linear 양자화
+120/616 Linear 양자화

@@ -1,0 +1,7 @@
+command python eval_hard_tsc.py --base /models/qwen2.5-coder-32b --hqq-nbits 4 --adapter /adapters/coder32b-lora-v3 --heldout --max-new 512
+616/616 Linear 양자화
+HQQ 스트리밍 치환 완료
+generated [task-alpha] 512 tokens
+HALOJSON {"v":1,"job":"score","phase":"scoring","gen_done":1,"heldout_total":7,"last_gen":"task-alpha"}
+generated [task-bravo] 512 tokens
+HALOJSON {"v":1,"job":"score","phase":"scoring","gen_done":2,"heldout_total":7,"last_gen":"task-bravo"}

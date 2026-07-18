@@ -1,0 +1,11 @@
+command python train_directml.py --base /models/qwen2.5-72b-instruct --hqq-nbits 4 --seq 4096 --lora-r 32 --lora-mlp --epochs 2
+[init] loading base model shards ...
+1/616 Linear 양자화
+2/616 Linear 양자화
+615/616 Linear 양자화
+616/616 Linear 양자화
+[quant] done, building optimizer  optim_steps≈39
+step 1 | loss(avg8) 1.84  18.2s/step
+step 2 | loss(avg8) 1.55  12.9s/step
+step 17 | loss(avg8) 0.71  12.4s/step
+step 18 | loss(avg8) 0.60  12.5s/step

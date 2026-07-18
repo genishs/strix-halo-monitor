@@ -33,4 +33,49 @@
 
 ---
 
+## Phase 1 — 도메인 모델 + 파서 이관 (최우선)
+
+브랜치: `feature/phase-1-parsers` (off `feature/phase-0-skeleton` → PR to `develop`)
+
+이 Phase의 산출물은 아직 대시보드가 아니라 **검증된 파싱 엔진**이다.
+
+### 한 일
+- **`model.py`** — 중심 계약. 순수 dataclass/enum만(로직·I/O 없음):
+  `JobType`,`Phase`,`EtaNote`,`Source` enum + `ModelInfo`,`JobState`,`MemoryStats`,`PowerStats`,
+  `ClockStats`,`Flags`,`Snapshot`. phase는 **키/enum**(번역 아님, O10).
+- **`status_schema.py`** — O4 머신리더블 상태줄 계약(ADR-0002). 예외안전 `emit_status()` +
+  소비자 `iter_status_lines`/`parse_last_status`. **stdlib 단일파일**(ML 스크립트 벤더링 가능).
+- **`config.py`** — 계층 설정(E). 기본값 + `HALO_*` 환경변수(bash와 100% 하위호환). 라벨맵 외부화(O13,
+  `base_label_for`). TOML은 후속 Phase(O2).
+- **`jobs/`** — 잡 파싱(C):
+  - `base.py`: `UnitRef`, `JobParser` 프로토콜, 레지스트리, `parse_job` 파사드.
+  - `_scrape.py`: monitor.sh grep/awk 패턴 **정확 이식**(정규식 fallback) + JSON 값 관용 coercion.
+  - `modelinfo.py`: `command` 라인 파싱 → `ModelInfo`. 라벨맵은 Config에서(O13).
+  - `eta.py`: phase별 ETA 전략. **구조화 반환**(초 + note 키), 포맷/번역은 렌더러.
+  - `train.py`/`score.py`: **JSON 우선 + regex fallback** 파서. monitor.sh phase 로직 정확 이식.
+- **테스트 픽스처** `tests/fixtures/logs/`(합성·마스킹) + `unittest` 39케이스:
+  modelinfo/train/score/status_schema/eta. **전부 통과**(3.14·3.12).
+
+### 핵심 설계 결정
+1. **JSON 우선 · regex fallback (ADR-0002).** JSON 있으면 phase/진행 우선, 없으면 현행 로그 regex.
+   지금은 로그에 JSON이 없어 **regex로 동작**(안전). `JobState.source`로 데이터 출처 노출(감시 agent용).
+2. **파서별 phase 우선순위를 monitor.sh와 정확히 파리티** — 두 잡의 bash 분기 순서가 다름을 보존:
+   - train: eval_save(step≥total & active) → training → first_step → quantizing → finished(무마커·비활성).
+     진행 마커가 있으면 유닛이 죽어도 마지막 학습라인 표시(bash quirk)까지 유지.
+   - score: **finished 우선**(비활성=종료) → prep(양자화만) → scoring(선형 외삽 ETA).
+3. **i18n·시간을 파서에서 제거(O10).** phase=enum, eta=(초, note키). 번역·HH:MM 포맷은 Phase 3 렌더러.
+4. **read-only(C2).** 파서·수집기 계약 어디에도 write 경로 없음. systemd는 Phase 2에서 읽기 전용만.
+
+### 인플라이트 파이프라인 안전 (준수 사항)
+- **모니터 쪽(JSON 소비 파서 + regex fallback)만 구현.** 현행 로그로 fallback 동작하므로 **지금 안전**.
+- **ML 스크립트에 O4 emit 추가는 보류.** 123B 채점·72B 학습 파이프라인 인플라이트 →
+  파이프라인 종료 후 또는 별도 브랜치에서 충분 테스트 후, 예외안전 print 한 줄로만 반영(ADR-0002).
+
+### 다음(Phase 2 예정)
+- `collectors/`(memory/power/clocks, amdgpu 백엔드) + `loop.py`(rate·RAPL 델타·랩어라운드·신호).
+- `jobs/detect.py`(systemd 유닛 감지, read-only) — Phase 1에서는 `UnitRef` 직접 주입으로 파서만 테스트.
+- sysfs 픽스처(`tests/fixtures/sysfs/`)로 수집기 결정적 테스트.
+
+---
+
 <!-- 다음 Phase 기록은 해당 feature 브랜치에서 이 아래에 추가된다. -->
