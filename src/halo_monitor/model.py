@@ -136,6 +136,23 @@ class MemoryStats:
 
 
 @dataclass
+class RawPower:
+    """Raw, *stateless* power readings from collectors (Phase 2).
+
+    The loop turns the RAPL energy counters into watts over the tick delta and
+    handles counter wraparound; collectors never keep state. ``amdgpu_w`` is an
+    already-instantaneous reading (hwmon ``power1_input``) usable as a total-power
+    fallback when RAPL is unreadable.
+    """
+
+    pkg_uj: int | None = None       # RAPL package energy counter (microjoules) = PPT
+    core_uj: int | None = None      # RAPL core (CPU) energy counter (microjoules)
+    pkg_max_uj: int | None = None   # max_energy_range_uj for pkg (wraparound bound)
+    core_max_uj: int | None = None  # max_energy_range_uj for core
+    amdgpu_w: float | None = None   # instantaneous amdgpu power (hwmon), watts
+
+
+@dataclass
 class PowerStats:
     """3-way power split (RAPL), watts. GPU is Total - CPU approximation (Phase 2)."""
 
