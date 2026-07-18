@@ -4,8 +4,13 @@
 
 `nvtop`은 전용 VRAM만 본다. 그런데 Strix Halo 같은 통합메모리(UMA) APU에서는 모델이 실제로 점유하는 메모리가
 **GTT(GPU에 매핑된 시스템 메모리)** 쪽에 잡힌다 — 즉 `nvtop`을 아무리 들여다봐도 "지금 모델이 메모리를 얼마나
-쓰고 있는지"는 보이지 않는다. `monitor.sh`는 이 GTT 사용량을 학습/채점 진행상황·모델 정보·전력(CPU/GPU/전체
+쓰고 있는지"는 보이지 않는다. `legacy/monitor.sh`는 이 GTT 사용량을 학습/채점 진행상황·모델 정보·전력(CPU/GPU/전체
 RAPL 3분할)과 함께 한 화면에 보여줘서 이 사각지대를 없앤다.
+
+> **⚠️ 마이그레이션 진행 중 (bash → Python).** 현재 **일상 도구는 `legacy/monitor.sh`** 다(아래 사용법).
+> Python판(`halo_monitor` 패키지)은 파서·모델부터 안쪽으로 이관 중이며 Phase 3에서 파리티가 확인되면
+> 기본 도구로 승격된다. 설계는 [`DESIGN.md`](DESIGN.md), 진행이력은 [`docs/DEVLOG.md`](docs/DEVLOG.md),
+> 브랜치 규칙은 [`docs/BRANCHING.md`](docs/BRANCHING.md) 참고.
 
 ## 왜 필요한가
 
@@ -29,7 +34,7 @@ RAPL 3분할)과 함께 한 화면에 보여줘서 이 사각지대를 없앤다
 별도 설치 없이 스크립트 하나로 동작한다.
 
 ```bash
-bash monitor.sh
+bash legacy/monitor.sh
 ```
 
 별도 터미널에 띄워두고 학습/채점 잡을 systemd `--user`로 돌리면 자동으로 감지해 보여준다. 종료는 `Ctrl-C`.
@@ -37,13 +42,24 @@ bash monitor.sh
 기본 언어는 한국어다. 대시보드 UI를 영어로 보려면:
 
 ```bash
-bash monitor.sh --english     # 짧게는 -e
-HALO_LANG=en bash monitor.sh  # 환경변수로도 지정 가능 (인자가 우선)
+bash legacy/monitor.sh --english     # 짧게는 -e
+HALO_LANG=en bash legacy/monitor.sh  # 환경변수로도 지정 가능 (인자가 우선)
 ```
+
+### Python판 (개발 중)
+
+```bash
+python -m halo_monitor            # 진입점 (현재는 마이그레이션 상태 안내 스텁)
+python -m unittest discover tests # 파서/모델 테스트 (무설치, stdlib unittest)
+```
+
+Python 마이그레이션의 상태줄 계약(학습/채점 스크립트가 emit하는 한 줄 JSON, 대시보드·무인 감시 agent가
+소비)은 [`docs/adr/0002-status-line-json-schema.md`](docs/adr/0002-status-line-json-schema.md) 참고.
 
 ## 설정 (환경변수)
 
-`monitor.sh` 상단 CONFIG 블록에서 아래 환경변수로 기본값을 덮어쓸 수 있다.
+`legacy/monitor.sh` 상단 CONFIG 블록에서 아래 환경변수로 기본값을 덮어쓸 수 있다. (Python판도 동일한
+`HALO_*` 환경변수를 그대로 읽는다 — 하위호환.)
 
 | 환경변수 | 내부 변수 | 기본값 | 설명 |
 |---|---|---|---|
@@ -57,7 +73,7 @@ HALO_LANG=en bash monitor.sh  # 환경변수로도 지정 가능 (인자가 우�
 예:
 
 ```bash
-HALO_LOG_DIR=/data/logs HALO_UNIT_GLOB="myjob-*" HALO_TITLE="My GPU Box" bash monitor.sh
+HALO_LOG_DIR=/data/logs HALO_UNIT_GLOB="myjob-*" HALO_TITLE="My GPU Box" bash legacy/monitor.sh
 ```
 
 ## 예시 출력
@@ -104,8 +120,13 @@ APUs.**
 
 `nvtop` only reports dedicated VRAM. On unified-memory (UMA) APUs like Strix Halo, the memory a model actually
 occupies shows up as **GTT (system memory mapped to the GPU)** instead — so `nvtop` alone can't tell you how much
-memory your model is really using. `monitor.sh` closes that gap by showing GTT usage alongside training/scoring
-progress, model info, and a 3-way power split (CPU/GPU/total via RAPL) in a single screen.
+memory your model is really using. `legacy/monitor.sh` closes that gap by showing GTT usage alongside
+training/scoring progress, model info, and a 3-way power split (CPU/GPU/total via RAPL) in a single screen.
+
+> **⚠️ Migration in progress (bash → Python).** The **working tool today is `legacy/monitor.sh`** (usage
+> below). The Python package (`halo_monitor`) is being migrated parser-and-model first; once Phase 3 parity is
+> confirmed it becomes the default. See [`DESIGN.md`](DESIGN.md), [`docs/DEVLOG.md`](docs/DEVLOG.md), and
+> [`docs/BRANCHING.md`](docs/BRANCHING.md).
 
 ## Why
 
@@ -131,7 +152,7 @@ progress, model info, and a 3-way power split (CPU/GPU/total via RAPL) in a sing
 No installation required — it's a single script.
 
 ```bash
-bash monitor.sh
+bash legacy/monitor.sh
 ```
 
 Run it in its own terminal alongside a training/scoring job running as a systemd `--user` unit; it auto-detects
@@ -140,13 +161,25 @@ the running unit. Exit with `Ctrl-C`.
 The dashboard defaults to Korean. To switch the UI to English:
 
 ```bash
-bash monitor.sh --english     # or -e
-HALO_LANG=en bash monitor.sh  # or via env var (the flag takes precedence)
+bash legacy/monitor.sh --english     # or -e
+HALO_LANG=en bash legacy/monitor.sh  # or via env var (the flag takes precedence)
 ```
+
+### Python version (in development)
+
+```bash
+python -m halo_monitor            # entry point (currently a migration-status stub)
+python -m unittest discover tests # parser/model tests (no install; stdlib unittest)
+```
+
+The status-line contract (a one-line JSON the training/scoring scripts emit, consumed by the dashboard and the
+unattended monitoring agents) is documented in
+[`docs/adr/0002-status-line-json-schema.md`](docs/adr/0002-status-line-json-schema.md).
 
 ## Configuration (environment variables)
 
-These override the defaults in the CONFIG block at the top of `monitor.sh`.
+These override the defaults in the CONFIG block at the top of `legacy/monitor.sh`. (The Python version reads the
+same `HALO_*` variables — backward compatible.)
 
 | Env var | Internal var | Default | Description |
 |---|---|---|---|
@@ -160,7 +193,7 @@ These override the defaults in the CONFIG block at the top of `monitor.sh`.
 Example:
 
 ```bash
-HALO_LOG_DIR=/data/logs HALO_UNIT_GLOB="myjob-*" HALO_TITLE="My GPU Box" bash monitor.sh
+HALO_LOG_DIR=/data/logs HALO_UNIT_GLOB="myjob-*" HALO_TITLE="My GPU Box" bash legacy/monitor.sh
 ```
 
 ## Example output

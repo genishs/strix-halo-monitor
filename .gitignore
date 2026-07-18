@@ -1,5 +1,20 @@
 # logs
 *.log
+# ...but test fixture logs are tracked on purpose
+!tests/fixtures/logs/*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+*.pyz
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # editor swap/backup files
 *.swp

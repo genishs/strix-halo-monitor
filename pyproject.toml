@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "halo-monitor"
+version = "0.1.0.dev0"
+description = "Real-time terminal dashboard for LLM training/scoring on AMD Strix Halo (gfx1151) unified-memory APUs"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+keywords = ["amd", "strix-halo", "gfx1151", "rocm", "gpu", "monitoring", "tui", "llm", "training"]
+# Runtime dependencies: NONE (stdlib only). Hard requirement C1 (extreme lightweight) / C4 (team maintainable).
+# `rich` is an OPTIONAL, lazily-imported renderer selected via `--rich` only. See DESIGN.md 1.3 / ADR-0001.
+dependencies = []
+
+[project.optional-dependencies]
+rich = ["rich>=13"]
+# Dev/test tooling. Tests themselves use stdlib `unittest` so they run with ZERO installs
+# (`python3 -m unittest discover`); pytest is supported but not required.
+dev = ["pytest>=7"]
+
+[project.scripts]
+halo-monitor = "halo_monitor.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/genishs/strix-halo-monitor"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+halo_monitor = ["py.typed"]
+
+# pytest is optional; when present, discover the same unittest-style tests.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
