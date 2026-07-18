@@ -104,6 +104,17 @@ class TestTrainParserJson(unittest.TestCase):
         self.assertEqual(js.source, Source.REGEX)
         self.assertEqual(js.step, 18)  # regex value, not the v999 line
 
+    def test_s_step_canonical_and_sstep_alias(self):
+        # Converged schema (ADR-0002) uses s_step; legacy sstep still accepted.
+        canonical = ('HALOJSON {"v":1,"job":"train","phase":"training",'
+                     '"step":10,"total":30,"loss":0.5,"s_step":20.0}\n')
+        legacy = ('HALOJSON {"v":1,"job":"train","phase":"training",'
+                  '"step":10,"total":30,"loss":0.5,"sstep":20.0}\n')
+        for log in (canonical, legacy):
+            js = train(log)
+            self.assertEqual(js.sstep, 20.0)
+            self.assertEqual(js.eta_seconds, int((30 - 10) * 20.0))  # 400
+
 
 if __name__ == "__main__":
     unittest.main()

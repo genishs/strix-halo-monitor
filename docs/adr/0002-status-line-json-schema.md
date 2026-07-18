@@ -25,22 +25,38 @@ HALOJSON {"v":1,"job":"train","phase":"training","step":18,"total":39,"loss":0.6
   로그 타임스탬프/레벨 접두가 앞에 붙어도 되도록 라인 내 **검색**으로 찾는다.
 - **컴팩트 JSON 객체 1개.** `ensure_ascii=False`(한글 라벨 허용).
 
-### 필드 (v1)
+### 필드 (v1 — 양노드 공통 확정본, 2026-07-18)
+
+> **컨벤션**: snake_case, 단위 접미사 통일(`_s`=초, `_gb`=기가바이트). `sstep`→**`s_step`** 확정.
+> emit 이전 단계라 **버전 bump 없이 v1을 확정**(아직 어떤 ML 스크립트도 emit하지 않음).
 
 | 필드 | 타입 | 필수 | 의미 |
 |---|---|---|---|
 | `v` | int | ✔ | 스키마 버전(==1). 미래/미지 버전은 소비자가 무시하고 regex fallback |
-| `job` | str | ✔ | `train` \| `score` (JobType 키) |
-| `phase` | str | ✔ | Phase 키: `idle`/`quantizing`/`first_step`/`training`/`eval_save`/`score_prep`/`scoring`/`finished` |
-| `ts` | number |   | emitter 벽시계 epoch초(권장) |
-| `quant_done`,`quant_total` | int |   | 양자화 진행 (quantizing/score_prep) |
+| `phase` | str | ✔ | Phase **키**(아래 열거값 그대로). train: `quantizing`/`first_step`/`training`/`eval_save`/`finished`. score: `score_prep`/`scoring`/`finished`. `idle` 공통 |
+| `ts` | number | ✔(권장) | emitter 벽시계 epoch초 |
+| `job` | str |   | `train` \| `score` (없으면 `train` 가정) |
+| `label` | str |   | 런 식별용 자유 라벨(모델+구성 등). 감시 agent가 런 구분에 사용 |
 | `step`,`total` | int |   | 옵티마 스텝/총 스텝 (training/eval_save) |
 | `loss` | number |   | 학습 loss (training) |
-| `sstep` | number |   | 초/스텝 (training) |
+| `val_loss` | number\|null |   | 검증 loss (eval_save 후) |
+| `s_step` | number |   | 초/스텝 (training) |
+| `eta_s` | int |   | emitter 자체 ETA 추정(초). 있으면 소비자가 자체 추정보다 우선 사용 가능 |
+| `quant_done`,`quant_total` | int |   | 양자화 진행 (quantizing/score_prep) |
 | `gen_done`,`heldout_total` | int |   | heldout 생성/총 (scoring) |
 | `last_gen` | str |   | 마지막 생성 태스크 라벨 (scoring) |
+| `gpu_gb` | number |   | emitter 자체 보고 GPU 메모리(프레임워크/프로세스 관점). ⚠️ 대시보드가 보여주는 **sysfs GTT와는 다름**. agent용 힌트 |
+| `host_avail_gb` | number |   | emitter 자체 보고 host RAM 여유(GB). agent용 힌트 |
 
-소비자는 **누락/추가 키를 관용**하고 malformed 라인에 **절대 크래시하지 않는다**.
+소비자는 **누락/추가 키를 관용**하고 malformed 라인에 **절대 크래시하지 않는다**. `gpu_gb`/`host_avail_gb`/
+`val_loss`/`label`/`eta_s`는 **선택**이며 대시보드 렌더러는 현재 sysfs 값을 우선한다(이 힌트들은 주로 sysfs 접근이
+없는 무인 감시 agent용).
+
+#### phase 값 매핑 (shas 제안 → 공통 확정)
+
+shas 초안의 `train|eval|quant` 3값은 공통 열거값으로 표준화한다: `train`→**`training`**, `eval`→**`eval_save`**,
+`quant`→**`quantizing`**. (`job`=`train`과 `phase`=`train`의 의미 충돌을 피하려 phase는 항상 전체 키를 쓴다.)
+양노드 스크립트(strix `train_directml.py` / 4060 `train_qlora.py`)는 구현이 달라도 **emit 스키마만 공통**이면 된다.
 
 ### Emit 계약 (⚠️ 인플라이트 파이프라인 안전)
 

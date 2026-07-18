@@ -19,26 +19,34 @@ Design goals:
 
 Wire format (one line, newline-terminated)::
 
-    HALOJSON {"v":1,"job":"train","phase":"training","step":18,"total":39,"loss":0.6,"sstep":473.0}
+    HALOJSON {"v":1,"job":"train","phase":"training","step":18,"total":39,"loss":0.6,"s_step":471.0,"ts":1752...}
 
-Fields (v1)
------------
-Always:
+Fields (v1 — cross-node common schema, both amdgpu/strix and nvidia/4060 nodes)
+------------------------------------------------------------------------------
+Convention: snake_case; unit suffixes ``_s`` (seconds), ``_gb`` (gigabytes).
+Required:
   v      int    schema version (== SCHEMA_VERSION)
-  job    str    JobType key: "train" | "score"
-  phase  str    Phase key: see model.Phase (idle/quantizing/first_step/training/
-                eval_save/score_prep/scoring/finished)
-Optional, ``ts`` recommended:
-  ts     number emitter wall-clock epoch seconds (float)
-Phase-specific progress (emit what applies; omit the rest):
-  quant_done, quant_total   int    quantization progress (quantizing / score_prep)
-  step, total               int    optimizer step / total steps (training / eval_save)
+  phase  str    Phase key (verbatim): quantizing/first_step/training/eval_save/
+                score_prep/scoring/finished/idle  (NOT "train"/"eval"/"quant")
+  ts     number emitter wall-clock epoch seconds (recommended-required)
+Optional (emit what applies; omit the rest):
+  job                       str    "train" | "score"  (absent => "train")
+  label                     str    freeform run label (model+config) for agents
+  step, total               int    optimizer step / total steps (training/eval_save)
   loss                      number training loss (avg) (training)
-  sstep                     number seconds per optimizer step (training)
+  val_loss                  number|null validation loss after eval (eval_save)
+  s_step                    number seconds per optimizer step (training)
+  eta_s                     int    emitter's own ETA estimate (seconds); consumer
+                                   may prefer it over its own estimate
+  quant_done, quant_total   int    quantization progress (quantizing / score_prep)
   gen_done, heldout_total   int    heldout tasks generated / total (scoring)
   last_gen                  str    short label of the last generated task (scoring)
+  gpu_gb                    number emitter's self-reported GPU mem (framework view) —
+                                   NOT the sysfs GTT the dashboard shows; agent hint
+  host_avail_gb             number emitter's self-reported host RAM free (GB); agent hint
 
 Consumers MUST tolerate missing/extra keys and never crash on a malformed line.
+The optional agent-hint fields are ignored by the dashboard renderer (it uses sysfs).
 """
 
 from __future__ import annotations
@@ -63,7 +71,7 @@ def emit_status(stream: Any = None, **fields: Any) -> None:
     Intended usage inside a training/scoring loop::
 
         from halo_monitor.status_schema import emit_status
-        emit_status(job="train", phase="training", step=i, total=n, loss=l, sstep=s)
+        emit_status(job="train", phase="training", step=i, total=n, loss=l, s_step=s, ts=time.time())
 
     ``v`` (schema version) is injected automatically. Any exception (serialization,
     broken pipe, closed stdout) is swallowed so the surrounding ML run is never
