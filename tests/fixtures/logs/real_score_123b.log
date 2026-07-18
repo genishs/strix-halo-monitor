@@ -1,0 +1,21 @@
+==========================================================
+job      : gpujob-score-123b-hqq2-seq512-20260717-182454-1438106
+started  : 2026-07-17T18:24:54+09:00
+cwd      : /WORKSPACE/ai_model
+command  : /home/USER/.venvs/ai_model_rocm/bin/python scripts/eval_hard_tsc.py --adapter ./models/adapter-A --base ./models/base/mistral-large-2411 --label 123b-hqq2-seq512 --quant hqq --hqq-nbits 2 --hqq-group-size 64 --heldout --max-new 4096
+serialize: 0   blocking: 0
+==========================================================
+=========================== RUN ==========================
+Skipping import of cpp extensions due to incompatible torch version. Please upgrade to torch >= 2.11.0 (found 2.10.0+rocm7.13.0a20260513).
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[18:25:00]   HQQ 스트리밍 로드: 양자화대상 Linear 616개, 비양자화 텐서 179개 (nbits=2 group_size=64)
+[18:25:12]   비양자화 텐서 179개 적재 완료 (12.7s, RAM 가용 49.6GB)
+[18:26:17]   20/616 Linear 양자화 완료 | RAM 가용 47.9GB
+[18:27:22]   40/616 Linear 양자화 완료 | RAM 가용 46.7GB
+[18:28:26]   60/616 Linear 양자화 완료 | RAM 가용 45.4GB
+[19:00:52]   HQQ 스트리밍 치환 완료: Linear 616개 → HQQLinear(4bit), 총 2152.5s
+  generated [ho-select         ]   921 chars (in=269tok new=289)
+  generated [ho-gallery        ]   531 chars (in=293tok new=170)
+  generated [ho-about-org      ]  1479 chars (in=741tok new=626)
+  generated [ho-attachfile     ]  2632 chars (in=1659tok new=935)
+  generated [ho-admin-dae      ]  5274 chars (in=1742tok new=1606)

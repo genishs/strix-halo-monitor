@@ -1,0 +1,28 @@
+==========================================================
+job      : gpujob-train123bfull-20260717-122446-555987
+started  : 2026-07-17T12:24:46+09:00
+cwd      : /WORKSPACE/ai_model
+command  : /home/USER/.venvs/ai_model_rocm/bin/python src/train_directml.py --backend cuda --dtype bf16 --base ./models/base/mistral-large-2411 --quant hqq --hqq-nbits 2 --hqq-group-size 64 --lora-r 16 --lora-mlp --grad-ckpt --seq 512 --epochs 1 --out ./models/adapter-A
+serialize: 0   blocking: 0
+==========================================================
+=========================== RUN ==========================
+Skipping import of cpp extensions due to incompatible torch version. Please upgrade to torch >= 2.11.0 (found 2.10.0+rocm7.13.0a20260513).
+[12:24:51] 디바이스: cuda (AMD Radeon Graphics) | dtype=bf16 | loss_scale=off | empty_cache_every=1
+[12:24:51] 시작 RAM 가용 51.1GB / CPU 4.5%
+[12:24:51] 모델 로드: ./models/base/mistral-large-2411 (dtype=torch.bfloat16, hqq-2bit-onthefly)
+[transformers] `torch_dtype` is deprecated! Use `dtype` instead!
+[12:24:52]   HQQ 스트리밍 로드: 양자화대상 Linear 616개, 비양자화 텐서 179개 (nbits=2 group_size=64)
+[12:25:04]   비양자화 텐서 179개 적재 완료 (12.6s, RAM 가용 49.0GB)
+[12:26:09]   20/616 Linear 양자화 완료 | RAM 가용 47.6GB
+[12:27:13]   40/616 Linear 양자화 완료 | RAM 가용 46.2GB
+[12:28:18]   60/616 Linear 양자화 완료 | RAM 가용 45.6GB
+[12:29:25]   80/616 Linear 양자화 완료 | RAM 가용 44.1GB
+[12:30:35]   100/616 Linear 양자화 완료 | RAM 가용 42.9GB
+trainable params: 279,707,648 || all params: 31,537,836,032 || trainable%: 0.8869
+[13:00:42] train_file=./data/processed/react_train.jsonl | EOS위생=on
+[13:00:43] [본런] epochs=1 batches/epoch=315 accum=8 optim_steps≈39
+[13:08:44] step 1 | loss(avg8) 5.2675 | 480.8s/step | RAM가용 7.4GB | GPU 40.3GB | CPU 4.0%
+[13:16:52] step 2 | loss(avg8) 5.4608 | 487.8s/step | RAM가용 5.8GB | GPU 40.3GB | CPU 9.3%
+[13:24:59] step 3 | loss(avg8) 3.1727 | 487.9s/step | RAM가용 4.1GB | GPU 40.3GB | CPU 9.3%
+[13:32:40] step 4 | loss(avg8) 2.2606 | 460.3s/step | RAM가용 7.2GB | GPU 40.3GB | CPU 9.3%
+[13:40:31] step 5 | loss(avg8) 1.9119 | 471.0s/step | RAM가용 5.8GB | GPU 40.3GB | CPU 9.3%
