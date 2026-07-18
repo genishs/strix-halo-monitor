@@ -87,7 +87,8 @@ class TrainParser:
                     "step": as_int(status.get("step")),
                     "total": as_int(status.get("total")),
                     "loss": as_float(status.get("loss")),
-                    "sstep": as_float(status.get("sstep")),
+                    # canonical wire field is s_step; accept legacy sstep too (ADR-0002)
+                    "sstep": as_float(status.get("s_step", status.get("sstep"))),
                     "quant_done": as_int(status.get("quant_done")),
                     "quant_total": as_int(status.get("quant_total")),
                 }

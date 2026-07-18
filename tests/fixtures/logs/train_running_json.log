@@ -4,6 +4,6 @@ command python train_directml.py --base /models/qwen2.5-72b-instruct --hqq-nbits
 [quant] done, building optimizer  optim_steps≈39
 HALOJSON {"v":1,"job":"train","phase":"quantizing","quant_done":616,"quant_total":616}
 step 1 | loss(avg8) 1.84  18.2s/step
-HALOJSON {"v":1,"job":"train","phase":"training","step":1,"total":39,"loss":1.84,"sstep":18.2}
+HALOJSON {"v":1,"job":"train","phase":"training","step":1,"total":39,"loss":1.84,"s_step":18.2,"ts":1752800000}
 step 18 | loss(avg8) 0.60  12.5s/step
-HALOJSON {"v":1,"job":"train","phase":"training","step":18,"total":39,"loss":0.6,"sstep":12.5}
+HALOJSON {"v":1,"job":"train","phase":"training","step":18,"total":39,"loss":0.6,"s_step":12.5,"ts":1752800600}
