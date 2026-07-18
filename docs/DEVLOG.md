@@ -78,4 +78,49 @@
 
 ---
 
+## Phase 2 — 수집기 + 갱신 루프
+
+브랜치: `feature/phase-2-collectors` (off `develop` → PR to `develop`)
+
+리드(개선생)가 인터페이스·루프를, 개동생이 concrete 수집기·픽스처를 분담.
+
+### 한 일 (리드 — 인터페이스 + 루프)
+- **`model.py`**: `RawPower` dataclass 추가(RAPL energy 카운터 pkg/core·max_energy_range·amdgpu 순간전력).
+  수집기는 **stateless raw만** 반환하고 watts 변환·델타·랩어라운드는 루프가 소유하도록 계약 분리.
+- **`collectors/base.py`**: `Collector` 프로토콜 + `CollectContext(cfg, backend, root)`. **델타상태 없음**(루프 소유),
+  주입 `root`로 테스트 결정성 확보.
+- **`collectors/backends/base.py`**: `GpuBackend` 프로토콜(`detect/mem_info/power/clocks`). read-only·non-raising·stateless 계약 명시(C2).
+- **`loop.py`**: 틱 엔진. GTT rate·RAPL watts(음수 델타=카운터 랩어라운드 → 해당 틱 skip, **bash 파리티**)·
+  SIGINT(정상종료)/SIGWINCH(재레이아웃 플래그)·복원력(`_safe`: 한 수집기가 던져도 루프 유지). 클럭·시각 주입으로 `tick()` 순수화 → HW 없이 테스트.
+- **`test_loop.py`**: fake 수집기+주입 클럭으로 델타(2샘플)·watts·랩어라운드 skip·복원력·플래그 검증(4케이스).
+
+### 한 일 (개동생 — concrete + 픽스처)
+- **`collectors/backends/amdgpu.py`**: `AmdgpuBackend`. card/hwmon을 **번호 아닌 내용(name/glob)으로 매칭**
+  (박스 실측 hwmon12=amdgpu — 번호 하드코딩이 실제로 깨짐을 확인). sclk는 **`pp_dpm_sclk` 우선**(박스에 존재·readable),
+  rocm-smi 미호출(0회, 안전예산 준수). 파일 부재/권한없음 → 해당 필드 None.
+- **`collectors/backends/nvidia.py`**: 스텁(`detect()->False`). 이슈 #7에서 shas가 4060으로 구현.
+- **`collectors/{memory,power,clocks}.py`**: MemoryCollector(backend GTT/VRAM + `/proc/meminfo` RAM/swap),
+  PowerCollector(RAPL pkg/core energy+max + amdgpu_w, **watts 계산 안 함**), ClockCollector(backend 위임).
+- **`backends/__init__.py`**: `select_backend(ctx)` — amdgpu 감지 시 amdgpu, 아니면 nvidia 스텁. import 사이클 회피 위해 ctx는 duck-typed.
+- **픽스처**: `tests/fixtures/sysfs/`(가짜 트리, hwmon0 decoy로 번호매칭 회귀 방지), `sysfs_no_rapl/`(우아한 빈값),
+  **실로그 마스킹 캡처** `real_score_123b.log`·`real_train_123b.log`(read-only 캡처 → `/home/user`→`/home/USER`,
+  경로/adapter 일반화, 호스트명·rocm-smi 블록 제거; 공개 모델명 유지). provenance는 fixtures README에 기록.
+- **테스트 28개 추가**: memory/power/clocks/backends 수집기 + 실로그 파서 검증. 기존 43 미변경.
+
+### 리드 리뷰 결과 (개선생)
+- **전체 71/71 통과.** C2 read-only 준수(코드에 write/systemd조작/subprocess 없음). 인터페이스 계약 정확 준수, 델타는 전부 루프에만.
+- **실로그 마스킹 누출 감사 통과**: `/home/user`·`새 볼륨`·호스트명(`ub26-sgshs`)·이메일·사용자명 커밋본에 없음(grep 확인).
+- **라이브 박스 end-to-end 스모크(read-only, 1틱)**: loop+concrete 수집기+amdgpu 백엔드+파서 조립 →
+  GTT 48.1/56GiB·`ram_free 2.45GB`(→ **ram_low 플래그 정상 발동**)·sclk 2860Mhz·amdgpu_w 85W·job=scoring 5/7 Mistral-Large 123B.
+  RAPL watts는 1틱째 None(2샘플 필요, 설계대로).
+- `select_backend`의 duck-typed ctx: import 사이클(`collectors.base`↔`collectors.backends`)의 정당한 회피로 수용. (후속 polish: `TYPE_CHECKING` 가드 주석 정도 — 비차단.)
+- `_amdgpu_card_dir` 틱당 3회 glob 호출(detect/mem_info/clocks): 스왑박스에서도 저비용이라 비차단. 필요 시 Phase 3에서 백엔드 조립부 캐시 검토.
+
+### 다음 (Phase 3 — 렌더러 파리티, QA 게이트 대상)
+- `ui/`(render/widgets/theme/i18n) — bash 레이아웃 문자단위 파리티(ko/en). `app.py` DI 조립.
+- `jobs/detect.py`(systemd 유닛 감지, read-only) 실배선.
+- bash 병행 RSS 실측(C1 게이트) + 큐선생(QA) 독립검증 후 머지.
+
+---
+
 <!-- 다음 Phase 기록은 해당 feature 브랜치에서 이 아래에 추가된다. -->
