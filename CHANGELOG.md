@@ -5,7 +5,13 @@
 
 ## [Unreleased]
 
-Python 풀 마이그레이션 진행 중. bash 도구는 `legacy/monitor.sh`로 보존(Phase 3 파리티 전까지 안전망).
+Phase 5(확장) 예정 — nvidia 백엔드(이슈 #5), 스파크라인, alerts, TOML 설정, `--rich`/`--ascii` 렌더 선택,
+차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임. 아직 커밋된 변경 없음.
+
+## [0.2.0] — 2026-07-18
+
+**첫 정식 Python 릴리스 — bash → Python 풀 마이그레이션 완료(Phase 0~4 컷오버).** `legacy/monitor.sh`는
+참조 baseline/fallback으로 보존되지만 기본 도구는 이제 `halo_monitor` Python 패키지다.
 
 ### Added
 - **Phase 0 — 레포 스켈레톤**: `pyproject.toml`(의존성 0, 콘솔스크립트 `halo-monitor`), `src/halo_monitor/`
