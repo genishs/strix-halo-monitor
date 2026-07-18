@@ -4,13 +4,13 @@
 
 `nvtop`은 전용 VRAM만 본다. 그런데 Strix Halo 같은 통합메모리(UMA) APU에서는 모델이 실제로 점유하는 메모리가
 **GTT(GPU에 매핑된 시스템 메모리)** 쪽에 잡힌다 — 즉 `nvtop`을 아무리 들여다봐도 "지금 모델이 메모리를 얼마나
-쓰고 있는지"는 보이지 않는다. `legacy/monitor.sh`는 이 GTT 사용량을 학습/채점 진행상황·모델 정보·전력(CPU/GPU/전체
+쓰고 있는지"는 보이지 않는다. `halo-monitor`는 이 GTT 사용량을 학습/채점 진행상황·모델 정보·전력(CPU/GPU/전체
 RAPL 3분할)과 함께 한 화면에 보여줘서 이 사각지대를 없앤다.
 
-> **⚠️ 마이그레이션 진행 중 (bash → Python).** 현재 **일상 도구는 `legacy/monitor.sh`** 다(아래 사용법).
-> Python판(`halo_monitor` 패키지)은 파서·모델부터 안쪽으로 이관 중이며 Phase 3에서 파리티가 확인되면
-> 기본 도구로 승격된다. 설계는 [`DESIGN.md`](DESIGN.md), 진행이력은 [`docs/DEVLOG.md`](docs/DEVLOG.md),
-> 브랜치 규칙은 [`docs/BRANCHING.md`](docs/BRANCHING.md) 참고.
+> **기본 도구는 이제 Python판 `halo-monitor`** 다(아래 설치/사용). bash → Python 마이그레이션이 완료돼
+> 컷오버됐고, 기존 bash 도구는 [`legacy/monitor.sh`](legacy/monitor.sh)에 **fallback으로 보존**한다(출력은
+> 바이트 단위로 동일). 설계는 [`DESIGN.md`](DESIGN.md), 개발이력은 [`docs/DEVLOG.md`](docs/DEVLOG.md),
+> 상태줄 계약은 [`docs/adr/0002-status-line-json-schema.md`](docs/adr/0002-status-line-json-schema.md) 참고.
 
 ## 왜 필요한가
 
@@ -31,10 +31,20 @@ RAPL 3분할)과 함께 한 화면에 보여줘서 이 사각지대를 없앤다
 
 ## 설치 / 사용
 
-별도 설치 없이 스크립트 하나로 동작한다.
+**런타임 의존성 0**(순수 stdlib). 세 가지 방법 중 택일:
 
 ```bash
-bash legacy/monitor.sh
+# 1) 소스에서 바로 실행 (개발/체크아웃 상태)
+python3 -m halo_monitor
+
+# 2) 단일 파일 배포 — 의존성 0, venv/pip 불필요 (대상 박스 권장)
+make pyz                         # dist/halo-monitor.pyz 생성 (stdlib zipapp)
+scp dist/halo-monitor.pyz box:   # 박스로 복사
+python3 halo-monitor.pyz         # 시스템 python3로 실행
+
+# 3) 설치형 (개발 머신) — 콘솔 스크립트 halo-monitor 등록
+pipx install .        # 또는:  pip install .
+halo-monitor
 ```
 
 별도 터미널에 띄워두고 학습/채점 잡을 systemd `--user`로 돌리면 자동으로 감지해 보여준다. 종료는 `Ctrl-C`.
@@ -42,19 +52,27 @@ bash legacy/monitor.sh
 기본 언어는 한국어다. 대시보드 UI를 영어로 보려면:
 
 ```bash
-bash legacy/monitor.sh --english     # 짧게는 -e
-HALO_LANG=en bash legacy/monitor.sh  # 환경변수로도 지정 가능 (인자가 우선)
+python3 -m halo_monitor --english     # 짧게는 -e
+HALO_LANG=en python3 -m halo_monitor  # 환경변수로도 지정 가능 (인자가 우선)
 ```
 
-### Python판 (개발 중)
+### Fallback: bash 원본
+
+컷오버 전의 bash 도구는 참조 baseline 겸 fallback으로 보존한다(출력 동일):
 
 ```bash
-python -m halo_monitor            # 진입점 (현재는 마이그레이션 상태 안내 스텁)
-python -m unittest discover tests # 파서/모델 테스트 (무설치, stdlib unittest)
+bash legacy/monitor.sh            # --english / HALO_LANG=en 동일 지원
 ```
 
-Python 마이그레이션의 상태줄 계약(학습/채점 스크립트가 emit하는 한 줄 JSON, 대시보드·무인 감시 agent가
-소비)은 [`docs/adr/0002-status-line-json-schema.md`](docs/adr/0002-status-line-json-schema.md) 참고.
+### 개발
+
+```bash
+make test    # 전체 테스트 (무설치, stdlib unittest)
+make pyz     # 단일 파일 .pyz 빌드
+```
+
+학습/채점 스크립트가 emit하는 **상태줄 계약**(한 줄 JSON, 대시보드·무인 감시 agent가 소비)은
+[`docs/adr/0002-status-line-json-schema.md`](docs/adr/0002-status-line-json-schema.md) 참고.
 
 ## 설정 (환경변수)
 
@@ -120,13 +138,14 @@ APUs.**
 
 `nvtop` only reports dedicated VRAM. On unified-memory (UMA) APUs like Strix Halo, the memory a model actually
 occupies shows up as **GTT (system memory mapped to the GPU)** instead — so `nvtop` alone can't tell you how much
-memory your model is really using. `legacy/monitor.sh` closes that gap by showing GTT usage alongside
+memory your model is really using. `halo-monitor` closes that gap by showing GTT usage alongside
 training/scoring progress, model info, and a 3-way power split (CPU/GPU/total via RAPL) in a single screen.
 
-> **⚠️ Migration in progress (bash → Python).** The **working tool today is `legacy/monitor.sh`** (usage
-> below). The Python package (`halo_monitor`) is being migrated parser-and-model first; once Phase 3 parity is
-> confirmed it becomes the default. See [`DESIGN.md`](DESIGN.md), [`docs/DEVLOG.md`](docs/DEVLOG.md), and
-> [`docs/BRANCHING.md`](docs/BRANCHING.md).
+> **The default tool is now the Python `halo-monitor`** (install/usage below). The bash → Python migration is
+> complete and cut over; the original bash tool is preserved as a fallback in
+> [`legacy/monitor.sh`](legacy/monitor.sh) (byte-identical output). See [`DESIGN.md`](DESIGN.md),
+> [`docs/DEVLOG.md`](docs/DEVLOG.md), and
+> [`docs/adr/0002-status-line-json-schema.md`](docs/adr/0002-status-line-json-schema.md).
 
 ## Why
 
@@ -149,10 +168,20 @@ training/scoring progress, model info, and a 3-way power split (CPU/GPU/total vi
 
 ## Install / Usage
 
-No installation required — it's a single script.
+**Zero runtime dependencies** (pure stdlib). Pick one:
 
 ```bash
-bash legacy/monitor.sh
+# 1) Run from source (checkout)
+python3 -m halo_monitor
+
+# 2) Single-file deploy — no venv/pip, dependency-free (recommended for the box)
+make pyz                         # builds dist/halo-monitor.pyz (stdlib zipapp)
+scp dist/halo-monitor.pyz box:   # copy to the box
+python3 halo-monitor.pyz         # run with the system python3
+
+# 3) Installed (dev machine) — registers the `halo-monitor` console script
+pipx install .        # or:  pip install .
+halo-monitor
 ```
 
 Run it in its own terminal alongside a training/scoring job running as a systemd `--user` unit; it auto-detects
@@ -161,15 +190,23 @@ the running unit. Exit with `Ctrl-C`.
 The dashboard defaults to Korean. To switch the UI to English:
 
 ```bash
-bash legacy/monitor.sh --english     # or -e
-HALO_LANG=en bash legacy/monitor.sh  # or via env var (the flag takes precedence)
+python3 -m halo_monitor --english     # or -e
+HALO_LANG=en python3 -m halo_monitor  # or via env var (the flag takes precedence)
 ```
 
-### Python version (in development)
+### Fallback: original bash tool
+
+The pre-cutover bash tool is kept as a reference baseline and fallback (identical output):
 
 ```bash
-python -m halo_monitor            # entry point (currently a migration-status stub)
-python -m unittest discover tests # parser/model tests (no install; stdlib unittest)
+bash legacy/monitor.sh            # same --english / HALO_LANG=en support
+```
+
+### Development
+
+```bash
+make test    # full test suite (no install; stdlib unittest)
+make pyz     # build the single-file .pyz
 ```
 
 The status-line contract (a one-line JSON the training/scoring scripts emit, consumed by the dashboard and the

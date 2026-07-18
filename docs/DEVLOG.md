@@ -163,4 +163,38 @@
 
 ---
 
+## Phase 4 — 컷오버 (Python 기본 승격 + 패키징)
+
+브랜치: `feature/phase-4-cutover` (off `develop` → PR to `develop`)
+
+로직 변경 없는 **승격·패키징** 단계 → 별도 QA 게이트 없이 리드 자체검증(피샘 승인).
+
+### 한 일
+- **Python 기본 승격**: README(한/영)를 Python-primary로 갱신. 설치/사용 3경로(소스 실행·`.pyz`·pipx/pip)를 앞에, bash는 **fallback 섹션**으로. `__main__` docstring 컷오버 반영.
+- **패키징**:
+  - `scripts/build-pyz.sh` + `make pyz`: stdlib `zipapp`으로 **의존성 0 단일파일** `dist/halo-monitor.pyz` 빌드(`__pycache__` 제외, shebang `/usr/bin/env python3`, 압축). 박스에 scp 후 시스템 python3로 실행 — venv/pip 불필요(DESIGN O5).
+  - `Makefile`: `test`/`pyz`/`run`/`clean` 타깃.
+  - 콘솔스크립트 `halo-monitor`는 이미 `pyproject [project.scripts]`에 있음(Phase 0).
+- **`legacy/monitor.sh` 보존**: 참조 baseline 겸 fallback. 삭제 안 함.
+
+### 리드 자체검증 (게이트)
+- **전체 테스트 통과**(develop 99 + O4 스키마 브랜치 반영). `make test` OK.
+- **`.pyz` 빌드·실행**: `make pyz` → 40KB, `python3 dist/halo-monitor.pyz --version` OK.
+- **콘솔스크립트**: python3.12 venv에 `pip install .` → `halo-monitor --version` OK, 설치 위치에서 패키지 import OK.
+  (박스 시스템 python3.14는 pip/ensurepip 미설치 — apt `python3-pip` 필요. **`.pyz` 경로가 박스 정식 배포**라 무관.)
+- **legacy 존재 확인**: `legacy/monitor.sh` 유지.
+
+### ⚠️ 파리티 예외 — 의도적 버그수정 (큐선생 QA 발견, 기록용)
+- **bash `legacy/monitor.sh`의 loss 추출이 깨져 있다**: `grep -oE 'loss\(avg8\) [0-9.]+' | grep -oE '[0-9.]+'` 가
+  `avg8`의 **`8`을 함께 주워** loss 값이 `8`+`0.60`(두 줄)이 돼 학습 중 박스 레이아웃을 깨뜨린다.
+- **Python판은 캡처그룹**(`loss\(avg8\) ([0-9.]+)`)으로 **이미 올바르게 고쳤다**(값 하나만 추출).
+- 따라서 이 한 케이스는 "바이트 단위 파리티"의 **의도적 예외 = 버그수정**이다. legacy는 참조 baseline이라 **고치지 않는다**(원본 보존). 나중에 조용한 드리프트로 오해하지 않도록 여기 명시. (CHANGELOG에도 기재.)
+
+### 다음 (Phase 5 — 확장, 각 독립 PR)
+- nvidia 백엔드(shas, 이슈 #5), 스파크라인 히스토리, `alerts.py`, TOML 설정, `--rich`/`--ascii` 테마, 차분 렌더(SSH 대역).
+- O4 emit을 ML 스크립트에 추가(72B 학습 종료 후, 예외안전 print, 별도 브랜치·테스트).
+- `RawPower.amdgpu_w` → `gpu_w` 리네임(다벤더 정합, 소PR).
+
+---
+
 <!-- 다음 Phase 기록은 해당 feature 브랜치에서 이 아래에 추가된다. -->
