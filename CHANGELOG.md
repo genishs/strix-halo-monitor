@@ -16,6 +16,12 @@ Python 풀 마이그레이션 진행 중. bash 도구는 `legacy/monitor.sh`로 
   - `config.py`: 계층 설정 + `HALO_*` 환경변수(bash 하위호환) + 라벨맵 외부화.
   - `jobs/`: train/score 파서(**JSON 우선 + regex fallback**), modelinfo, eta, 레지스트리.
   - `unittest` 39케이스 + `tests/fixtures/logs/` 픽스처.
+- **Phase 2 — 수집기 + 갱신 루프**:
+  - `model.py`: `RawPower`(RAPL 카운터·amdgpu 순간전력 raw) 추가.
+  - `collectors/`: `Collector`/`GpuBackend` 프로토콜, `amdgpu` 백엔드(번호 아닌 내용매칭, `pp_dpm_sclk`),
+    `nvidia` 스텁, memory/power/clocks 수집기(stateless raw), `select_backend`.
+  - `loop.py`: 틱 엔진 — GTT rate·RAPL watts·랩어라운드 skip(bash 파리티)·SIGINT/SIGWINCH·복원력. DI로 테스트가능.
+  - sysfs 가짜트리 + 마스킹 실로그 픽스처 + 수집기/실로그 테스트 28케이스(누적 71).
 - 문서: `docs/DEVLOG.md`, `docs/adr/0001`(언어·런타임), `docs/adr/0002`(상태줄 스키마).
 
 ### Changed
