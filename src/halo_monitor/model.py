@@ -113,11 +113,18 @@ class JobState:
     heldout_total: int | None = None      # scoring: total heldout tasks
     last_gen: str | None = None           # scoring: last "generated [...]" line
 
+    # Raw display strings, preserved verbatim from the log for byte-exact render
+    # parity (the log may carry high precision like "1.9119" / "471.0" that a float
+    # round-trip would lose). None on the JSON path — renderer formats the float then.
+    loss_disp: str | None = None
+    sstep_disp: str | None = None
+
     # --- derived / overlay ---
     eta_seconds: int | None = None
     eta_note: EtaNote | None = None
     error_count: int = 0
     elapsed_seconds: int | None = None
+    unit_name: str | None = None          # unit name (scoring smodel fallback / display)
     unit_active: str | None = None        # systemd is-active (active/inactive/failed/...)
     unit_result: str | None = None        # systemd Result (success/exit-code/...)
     source: Source = Source.NONE

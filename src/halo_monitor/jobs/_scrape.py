@@ -102,8 +102,26 @@ def train_quant(text: str) -> tuple[int, int] | None:
     return int(m.group(1)), int(m.group(2))
 
 
+def _last_str(pattern: re.Pattern[str], text: str, group: int = 1) -> str | None:
+    """Last match's raw group string, or None (kept verbatim for render parity)."""
+    m = None
+    for m in pattern.finditer(text):
+        pass
+    if m is None:
+        return None
+    try:
+        return m.group(group)
+    except IndexError:
+        return None
+
+
 def train_progress(text: str) -> dict[str, Any]:
-    """Scrape training numbers: quant, total(optim_steps), step, loss, sstep."""
+    """Scrape training numbers: quant, total(optim_steps), step, loss, sstep.
+
+    ``loss``/``sstep`` are floats for computation; ``loss_disp``/``sstep_disp`` keep the
+    raw log strings verbatim for byte-exact render parity (the log may carry more
+    precision than a rounded float would show).
+    """
     q = train_quant(text)
     return {
         "quant_done": q[0] if q else None,
@@ -112,6 +130,8 @@ def train_progress(text: str) -> dict[str, Any]:
         "step": _last_int(_RE_STEP, text),
         "loss": _last_float(_RE_LOSS, text),
         "sstep": _last_float(_RE_SSTEP, text),
+        "loss_disp": _last_str(_RE_LOSS, text),
+        "sstep_disp": _last_str(_RE_SSTEP, text),
     }
 
 

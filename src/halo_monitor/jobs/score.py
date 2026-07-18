@@ -112,6 +112,7 @@ class ScoreParser:
             eta_note=eta_note,
             error_count=errs,
             elapsed_seconds=elapsed,
+            unit_name=unit.name,
             unit_active=unit.active,
             unit_result=unit.result,
             source=source,

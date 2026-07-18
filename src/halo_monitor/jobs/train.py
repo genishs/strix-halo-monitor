@@ -115,10 +115,13 @@ class TrainParser:
             total=nums["total"],
             loss=nums["loss"],
             sstep=nums["sstep"],
+            loss_disp=nums.get("loss_disp"),      # verbatim from log (regex path only)
+            sstep_disp=nums.get("sstep_disp"),
             eta_seconds=eta_s,
             eta_note=eta_note,
             error_count=errs,
             elapsed_seconds=elapsed,
+            unit_name=unit.name,
             unit_active=unit.active,
             unit_result=unit.result,
             source=source,

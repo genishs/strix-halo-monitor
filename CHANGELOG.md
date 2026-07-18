@@ -22,6 +22,12 @@ Python 풀 마이그레이션 진행 중. bash 도구는 `legacy/monitor.sh`로 
     `nvidia` 스텁, memory/power/clocks 수집기(stateless raw), `select_backend`.
   - `loop.py`: 틱 엔진 — GTT rate·RAPL watts·랩어라운드 skip(bash 파리티)·SIGINT/SIGWINCH·복원력. DI로 테스트가능.
   - sysfs 가짜트리 + 마스킹 실로그 픽스처 + 수집기/실로그 테스트 28케이스(누적 71).
+- **Phase 3 — 렌더러 파리티 + systemd 감지 + app 조립** (⚠️ 큐선생 QA 게이트 통과 후 머지):
+  - `ui/`: `render`/`widgets`/`theme`/`i18n` — `legacy/monitor.sh` 출력과 **바이트 단위 파리티**(ko/en).
+  - `jobs/detect.py`: systemd `--user` 유닛 감지(read-only 하드게이트 — 화이트리스트 밖 동사 `ValueError`).
+  - `app.py`/`__main__`: DI 조립. `python -m halo_monitor`가 실제 대시보드 실행(`--english`/`-e`).
+  - `JobState`에 `unit_name`·`loss_disp`/`sstep_disp`(로그 원문 보존, 렌더 파리티) 추가.
+  - 골든 렌더 12 + detect 16 테스트(누적 99). 라이브 bash↔py 파리티·C1 RSS(~15.7MB) 실측 확인.
 - 문서: `docs/DEVLOG.md`, `docs/adr/0001`(언어·런타임), `docs/adr/0002`(상태줄 스키마).
 
 ### Changed
