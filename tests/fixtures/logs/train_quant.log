@@ -1,0 +1,5 @@
+command python train_directml.py --base /models/mistral-large-2411 --hqq-nbits 4 --seq 2048 --lora-r 16
+[init] loading base model shards ...
+1/616 Linear 양자화
+2/616 Linear 양자화
+300/616 Linear 양자화
