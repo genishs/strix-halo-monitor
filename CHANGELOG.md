@@ -28,10 +28,20 @@ Python 풀 마이그레이션 진행 중. bash 도구는 `legacy/monitor.sh`로 
   - `app.py`/`__main__`: DI 조립. `python -m halo_monitor`가 실제 대시보드 실행(`--english`/`-e`).
   - `JobState`에 `unit_name`·`loss_disp`/`sstep_disp`(로그 원문 보존, 렌더 파리티) 추가.
   - 골든 렌더 12 + detect 16 테스트(누적 99). 라이브 bash↔py 파리티·C1 RSS(~15.7MB) 실측 확인.
+- **Phase 4 — 컷오버**: Python 기본 승격. `scripts/build-pyz.sh`+`make pyz`로 의존성 0 단일파일
+  `halo-monitor.pyz`(stdlib zipapp) 빌드. `Makefile`(test/pyz/run/clean). README 한/영 Python-primary 갱신.
+- **O4 스키마 v1 공통 확정**(양노드): `s_step` 통일 + 선택필드(`label`/`val_loss`/`eta_s`/`gpu_gb`/`host_avail_gb`).
+  ADR-0002 갱신, 소비측 `s_step`+`sstep` alias. (이슈 #5에 nvidia 명세 + 공통 스키마.)
 - 문서: `docs/DEVLOG.md`, `docs/adr/0001`(언어·런타임), `docs/adr/0002`(상태줄 스키마).
 
 ### Changed
-- `monitor.sh` → `legacy/monitor.sh` (경로 이동, 동작 동일). README 실행경로 갱신.
+- `monitor.sh` → `legacy/monitor.sh` (경로 이동, 동작 동일). Python판이 기본 도구로 승격, bash는 fallback.
+
+### Fixed
+- **loss 추출 파리티 예외(의도적 버그수정)**: bash `legacy/monitor.sh`는 `loss(avg8)`에서 `grep`가 `avg8`의
+  `8`까지 주워 loss가 두 줄(`8`+실제값)로 깨져 박스 레이아웃을 무너뜨린다. Python판은 캡처그룹으로 실제 값만
+  추출해 **올바르다**. 이 한 케이스는 "바이트 단위 파리티"의 의도적 예외이며 legacy(참조 baseline)는 원본 보존을
+  위해 고치지 않는다.
 
 ### Notes
 - ML 스크립트(`train_directml.py`/`eval_hard_tsc.py`)의 O4 상태줄 **emit은 아직 미적용** —

@@ -1,9 +1,9 @@
 """Entry point: ``python -m halo_monitor`` / console script ``halo-monitor``.
 
-Runs the live dashboard (collectors + loop + renderer, Phase 3). Flags mirror the
-bash tool: ``--english``/``-e`` for the English UI, plus ``--version``. The bash
-tool in ``legacy/monitor.sh`` remains the default until Phase 4 cutover; running
-this in parallel is read-only and safe.
+Runs the live dashboard (collectors + loop + renderer). Flags mirror the bash tool:
+``--english``/``-e`` for the English UI, plus ``--version``. As of the Phase 4
+cutover this is the default tool; ``legacy/monitor.sh`` is kept only as a
+fallback/reference baseline.
 """
 
 from __future__ import annotations
