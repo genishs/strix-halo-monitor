@@ -123,4 +123,44 @@
 
 ---
 
+## Phase 3 — 렌더러 파리티 + systemd 감지 + app 조립
+
+브랜치: `feature/phase-3-renderer` (off `develop` → PR to `develop`)
+
+리드(개선생)=렌더러/i18n/app + 모델 파리티 보정, 개동생=`jobs/detect.py`. **완료 후 큐선생(QA) 게이트 대상.**
+
+### 파리티 기준 확보 (라이브 골든 마스터)
+- 살아있는 박스에서 `legacy/monitor.sh` 출력을 **read-only 캡처**(ko/en) → 바이트 단위 파리티 타깃 확보.
+  마침 72B 학습이 시작돼 양자화 phase 실프레임을 잡았다. 정확한 룬 수(header 18/18·umem 32/32·**power sep 31/33 비대칭**·footer 31/31)를 실측해 하드코딩.
+
+### 한 일 (리드 — 렌더러)
+- **`ui/theme.py`**: 글리프 + **고정폭 구분선 기하**(bash 소스에서 룬 수 복사, 라벨 길이와 무관 → ko/en 폭 차이가 bash와 동일).
+- **`ui/i18n.py`**: ko/en 카탈로그 + phase/eta 문자열 조립. bash 문구 **축자 이식**(EN 양자화도 "Linear 양자화" 임베드하는 quirk까지). phase=enum→문자열, eta note=키→문자열(O10 분리 완성).
+- **`ui/widgets.py`**: awk/printf 수치 포맷 이식(gb1/gb0·pct·bar·rate 부호·watt·hms·model_line addpart·ram_flag·eta_display·done_time).
+- **`ui/render.py`**: 12줄을 bash printf 순서대로 바이트 정확 조립. `render_frame(snapshot,cfg)` + `make_renderer`(clear-redraw 드라이버).
+- **모델 파리티 보정(merged Phase 1 코드 소폭 확장, 하위호환)**: `JobState`에 `unit_name`(scoring smodel 폴백)·`loss_disp`/`sstep_disp`(로그 원문 문자열 보존 — 실로그 loss가 `1.9119`처럼 고정밀이라 float 재포맷은 파리티 깨짐) 추가. `_scrape`/`train`/`score`에서 채움. JSON 경로는 disp 없음 → float 포맷 폴백.
+- **`app.py` + `__main__`**: DI 조립(config→backend→collectors+job_provider(detect+parse)→loop→renderer). `python -m halo_monitor`가 **실제 대시보드**를 띄운다(파리티/RSS 측정 가능). `--english`/`-e`·`--version`.
+
+### 한 일 (개동생 — detect.py)
+- **`jobs/detect.py`**: systemd `--user` 유닛 감지 read-only 실배선. **read-only 하드게이트**: 모든 systemctl 호출이 `_systemctl` 단일 진입점 → 화이트리스트(`list-units`/`is-active`/`show`) 밖 동사는 subprocess 생성 전에 `ValueError`. start_epoch은 `ActiveEnterTimestampMonotonic`+`/proc/stat btime`(tz 파싱·2차 subprocess 회피). run/listdir 주입으로 테스트. 16케이스(가드 4 포함).
+
+### 리드 검증 결과 (개선생)
+- **전체 99/99 통과.** 골든 렌더 12(ko/en 실프레임 바이트정확 재현 + phase별 + 엣지).
+- **라이브 side-by-side(read-only, bash vs `python -m halo_monitor`, 동일 72B 학습)**: **6/12 줄 바이트 동일**(header·진행·모델·양쪽 구분선·VRAM), 나머지 6줄은 **휘발성 수치만 차이**(elapsed 17m20s vs 17m26s ≈5초차·GTT·RAM·전력·sclk·시각). 구조·라벨·포맷·부호(rate `-2310`) 차이 0.
+- **C1 RSS 실측**: python ~**15.7MB** steady vs bash ~11.4MB(트리, 자식 포함). DESIGN 예측 12–18MB 범위 내, 60GB 학습잡 옆에서 무시 수준. **틱당 fork ~4회(read-only systemctl)** vs bash 30+ (rocm-smi 미사용) → C1 fork-storm 목표 달성.
+- **C2 재확인**: write 경로 없음. detect의 systemctl은 read-only 화이트리스트 하드게이트. 유일 subprocess.
+
+### ⚠️ 머지 보류 — 큐선생 QA 게이트
+피샘 지시대로 이 PR은 **바로 머지하지 않는다.** 큐선생 독립검증(C2 재확인·bash↔py 파리티·RSS 실측) 통과 후 깃선생 머지.
+
+### 비차단 관찰 / 후속
+- detect가 틱당 systemctl 4회 fork: 유닛 감지를 N틱마다 캐시하면 더 줄일 수 있음(Phase 5).
+- `read_log_text`는 전체 읽기(파리티). 초대형 로그 시 `max_bytes` 배선은 RSS 게이트 결과 보고 판단.
+- rate 1틱째 None→"?"(bash는 첫 틱 bogus 큰 수) — steady-state 파리티엔 무영향.
+
+### 다음 (Phase 4 — 컷오버, QA 게이트)
+- Python 기본 승격·`legacy/monitor.sh` fallback 보존·pipx/`.pyz` 배포·README 갱신.
+
+---
+
 <!-- 다음 Phase 기록은 해당 feature 브랜치에서 이 아래에 추가된다. -->
