@@ -8,6 +8,14 @@
 Phase 5(확장) 예정 — nvidia 백엔드(이슈 #5), 스파크라인, alerts, TOML 설정, `--rich`/`--ascii` 렌더 선택,
 차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임. 아직 커밋된 변경 없음.
 
+## [0.2.1] — 2026-07-18
+
+### Fixed
+- **버전 메타데이터 불일치**: `v0.2.0` 릴리스 시 `pyproject.toml`의 `version`은 `0.2.0`으로 올렸지만
+  `src/halo_monitor/__init__.py`의 `__version__`이 `0.1.0.dev0`으로 하드코딩된 채 남아있어
+  `halo-monitor --version`/`.pyz --version`이 잘못된 버전을 출력했다. 두 값을 `0.2.1`로 동기화.
+  기능 변경 없음 — 순수 메타데이터 수정.
+
 ## [0.2.0] — 2026-07-18
 
 **첫 정식 Python 릴리스 — bash → Python 풀 마이그레이션 완료(Phase 0~4 컷오버).** `legacy/monitor.sh`는
