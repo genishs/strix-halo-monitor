@@ -176,11 +176,40 @@ class ClockStats:
 
 
 @dataclass
+class DiskStat:
+    """Filesystem usage for one configured mount (collectors/disk.py, Phase 5).
+
+    Sourced from ``os.statvfs`` ONLY — free-block counters the kernel already
+    caches, so probing is essentially zero-I/O and never competes with a running
+    training job for disk bandwidth (C2 invariant: no ``du``, no directory walk,
+    no file-content reads).
+
+    ``free_bytes`` is the space available to an unprivileged user (``f_bavail``),
+    i.e. what the dashboard reports as "free". ``used_bytes``/``used_pct`` are
+    against the full capacity (``f_blocks``), so ``free + used`` need not equal
+    ``total`` (the reserved-block gap). ``present`` is False when the mount could
+    not be stat'd (unmounted / absent removable drive) — the renderer shows it as
+    unavailable rather than crashing. ``low`` is the threshold verdict computed by
+    the collector from the config warning limits.
+    """
+
+    path: str
+    label: str | None = None          # display label; falls back to path
+    total_bytes: int | None = None
+    free_bytes: int | None = None     # available to unprivileged user (f_bavail)
+    used_bytes: int | None = None
+    used_pct: int | None = None       # used / total, rounded (awk %.0f parity)
+    low: bool = False                 # free below a configured warning threshold
+    present: bool = False             # mount was stat'd successfully
+
+
+@dataclass
 class Flags:
     """Alert/threshold flags computed from a Snapshot (alerts.py, Phase 5)."""
 
     ram_low: bool = False
     has_error: bool = False
+    disk_low: bool = False            # any configured mount below its free threshold
 
 
 @dataclass
@@ -194,4 +223,5 @@ class Snapshot:
     memory: MemoryStats = field(default_factory=MemoryStats)
     power: PowerStats = field(default_factory=PowerStats)
     clocks: ClockStats = field(default_factory=ClockStats)
+    disks: list[DiskStat] = field(default_factory=list)
     flags: Flags = field(default_factory=Flags)

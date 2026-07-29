@@ -33,6 +33,11 @@ UNIT_GLOB="${HALO_UNIT_GLOB:-gpujob-*}"                 # systemd --user 유닛 
 TITLE="${HALO_TITLE:-Strix Halo Train/Score Monitor}"   # 대시보드 제목
 POOL_GB="${HALO_POOL_GB:-60}"                           # 통합메모리 풀 안내치(GB, 경고 문구용 — 실제 총량은 sysfs에서 읽음)
 HELDOUT_TOTAL="${HALO_HELDOUT_TOTAL:-7}"                # 채점 heldout 태스크 총 개수
+# 디스크 위젯(Phase 5): 표시할 마운트 목록과 여유공간 경고 임계.
+#   HALO_DISK_MOUNTS = "라벨=경로;라벨=경로;..." (`;` 구분, 경로에 공백 허용). 빈 값이면 디스크섹션 끔.
+#   여유가 <경고GB 또는 <경고% 이면 ⚠️ 마커. df(=statvfs)만 사용 — du/디렉토리 스캔 없음(학습 I/O 무간섭).
+DISK_WARN_GB="${HALO_DISK_WARN_GB:-10}"                 # 여유공간 경고 임계(GiB)
+DISK_WARN_PCT="${HALO_DISK_WARN_PCT:-5}"                # 여유공간 경고 임계(%)
 # ─────────────────────────────────────────────────────────────────────────
 
 # ── 언어 모드: 기본 한국어. HALO_LANG=en 환경변수 또는 --english/-e 인자로 영어 전환.
@@ -61,6 +66,20 @@ base_label_for(){
     *)                      echo "$1";;
   esac
 }
+
+# 디스크 마운트 목록 파싱(1회). HALO_DISK_MOUNTS 미설정 시 기본 3개(데이터·외장모델·루트).
+disk_labels=(); disk_paths=()
+if [ -n "${HALO_DISK_MOUNTS+set}" ]; then DISK_SPEC="$HALO_DISK_MOUNTS"; else
+  DISK_SPEC="/mnt/data=/mnt/data;외장모델=/run/media/user/새 볼륨;/=/"; fi
+_trim(){ printf '%s' "$1" | sed 's/^ *//; s/ *$//'; }
+IFS=';' read -ra _dents <<< "$DISK_SPEC"
+for _e in "${_dents[@]}"; do
+  [ -z "$(_trim "$_e")" ] && continue
+  if [[ "$_e" == *"="* ]]; then _lbl="$(_trim "${_e%%=*}")"; _pth="$(_trim "${_e#*=}")";
+  else _lbl="$(_trim "$_e")"; _pth="$_lbl"; fi
+  disk_labels+=("$_lbl"); disk_paths+=("$_pth")
+done
+disk_maxw=0; for _l in "${disk_labels[@]}"; do [ "${#_l}" -gt "$disk_maxw" ] && disk_maxw=${#_l}; done
 
 gttmax=$(cat /sys/class/drm/card*/device/mem_info_gtt_total 2>/dev/null | head -1)
 gttmaxg=$(awk "BEGIN{printf \"%.0f\", $gttmax/1073741824}")
@@ -205,6 +224,31 @@ while true; do
   echo   "  ─────────────────────────────── $(t "전력 · GPU" "Power · GPU") ─────────────────────────────────"
   printf "   ★%s:  CPU %3sW  │  GPU %3sW  │  %s %3sW    %s\n" "$(t "전력" "Power")" "$cpuW" "$gpuW" "$(t "전체" "Total")" "$totW" "$(t "(GPU=전체−CPU 근사, RAPL)" "(GPU=Total−CPU approx, RAPL)")"
   printf "   sclk: %sMhz      %s: %s\n" "${sclk:-?}" "$(t "유닛" "unit")" "$active"
+  # 디스크: 마운트별 사용율/여유공간/부족경고 (df=statvfs만; du·재귀스캔 없음 → 학습 I/O 무간섭)
+  if [ "${#disk_paths[@]}" -gt 0 ]; then
+    echo "  ────────────────────────────────── $(t "디스크" "Disk") ──────────────────────────────────"
+    _i=0
+    while [ "$_i" -lt "${#disk_paths[@]}" ]; do
+      _lbl="${disk_labels[$_i]}"; _pth="${disk_paths[$_i]}"
+      _lblpad=$(printf "%-${disk_maxw}s" "$_lbl")
+      _df=$(df -B1 --output=size,used,avail "$_pth" 2>/dev/null | tail -1)
+      if [ -z "$_df" ] || ! printf '%s' "$_df" | grep -qE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]*$'; then
+        printf "   ★%s:   %s\n" "$_lblpad" "$(t "사용불가" "unavailable")"
+      else
+        set -- $_df; _sz=$1; _us=$2; _av=$3
+        _pct=$(awk "BEGIN{printf \"%.0f\", $_us/$_sz*100}")
+        _usg=$(awk "BEGIN{printf \"%.1f\", $_us/1073741824}")
+        _szg=$(awk "BEGIN{printf \"%.0f\", $_sz/1073741824}")
+        _avg=$(awk "BEGIN{printf \"%.1f\", $_av/1073741824}")
+        _fl=$((_pct/5)); [ "$_fl" -gt 20 ] && _fl=20; [ "$_fl" -lt 0 ] && _fl=0
+        _bar=$(printf '█%.0s' $(seq 1 $_fl 2>/dev/null))$(printf '░%.0s' $(seq 1 $((20-_fl)) 2>/dev/null))
+        _low=$(awk "BEGIN{ag=$_av/1073741824; ap=$_av/$_sz*100; print (ag<$DISK_WARN_GB||ap<$DISK_WARN_PCT)?1:0}")
+        if [ "$_low" = "1" ]; then _flag="⚠️$(t "위험" "LOW")"; else _flag="✓"; fi
+        printf "   ★%s:   %5s / %sGB  [%s] %s%%   %s %sGB %s\n" "$_lblpad" "$_usg" "$_szg" "$_bar" "$_pct" "$(t "여유" "free")" "$_avg" "$_flag"
+      fi
+      _i=$((_i+1))
+    done
+  fi
   echo "╚═══════════════════════════════ %s · $(t "Ctrl-C 종료" "Ctrl-C to quit") ═══════════════════════════════╝" | sed "s/%s/$(date '+%H:%M:%S')/"
   sleep 2
 done

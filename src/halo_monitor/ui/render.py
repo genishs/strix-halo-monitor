@@ -106,6 +106,17 @@ def render_frame(
         f"{i18n.t(lang, 'unit')}: {job.unit_active or '?'}"
     )
 
+    # 11b. disk section (Phase 5) — additive: only when the snapshot carries disk
+    # data, so frames assembled without it (e.g. the byte-parity golden fixtures)
+    # stay identical to the legacy 12-line layout.
+    disk_block: list[str] = []
+    if snapshot.disks:
+        sep_disk = (
+            f"  {dash * theme.disk_dash_left} {i18n.t(lang, 'disk')} "
+            f"{dash * theme.disk_dash_right}"
+        )
+        disk_block = [sep_disk, *widgets.disk_lines(snapshot.disks, lang, theme)]
+
     # 12. footer
     now = time.strftime("%H:%M:%S", localtime(snapshot.ts))
     footer = (
@@ -115,7 +126,7 @@ def render_frame(
 
     return "\n".join([
         header, l_progress, l_elapsed, l_model, sep_umem, l_gtt,
-        l_vram, l_ram, sep_power, l_power, l_sclk, footer,
+        l_vram, l_ram, sep_power, l_power, l_sclk, *disk_block, footer,
     ])
 
 

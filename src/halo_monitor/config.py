@@ -25,6 +25,28 @@ DEFAULT_LABEL_MAP: dict[str, str] = {
 
 
 @dataclass(frozen=True)
+class DiskTarget:
+    """One filesystem mount the disk widget reports on (DESIGN §3 "새 지표 추가").
+
+    ``label`` is the display name; when ``None`` the renderer shows ``path`` itself.
+    Immutable so ``Config`` stays frozen/hashable.
+    """
+
+    path: str
+    label: str | None = None
+
+
+#: Mounts that matter for the training/scoring workflow: the adapter-output store,
+#: the external model drive (may be absent -> shown as unavailable), and root.
+#: Override via ``HALO_DISK_MOUNTS`` or by constructing ``Config`` directly.
+DEFAULT_DISK_MOUNTS: tuple[DiskTarget, ...] = (
+    DiskTarget("/mnt/data", "/mnt/data"),
+    DiskTarget("/run/media/user/새 볼륨", "외장모델"),
+    DiskTarget("/", "/"),
+)
+
+
+@dataclass(frozen=True)
 class Config:
     """Immutable runtime configuration. Field defaults mirror monitor.sh."""
 
@@ -37,6 +59,10 @@ class Config:
     interval_s: float = 2.0
     sysfs_root: str = "/"                # injectable for tests (collectors, Phase 2)
     label_map: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_LABEL_MAP))
+    # --- disk widget (Phase 5) ---
+    disk_mounts: tuple[DiskTarget, ...] = DEFAULT_DISK_MOUNTS
+    disk_warn_free_gb: float = 10.0      # warn when free space < this many GiB ...
+    disk_warn_free_pct: float = 5.0      # ... OR free fraction < this percent
 
     def base_label_for(self, base_bn: str | None) -> str | None:
         """Map a base-model directory basename to a display label.
@@ -56,6 +82,38 @@ def _int(env: Mapping[str, str], key: str, default: int) -> int:
         return default
 
 
+def _float(env: Mapping[str, str], key: str, default: float) -> float:
+    try:
+        return float(env[key])
+    except (KeyError, ValueError):
+        return default
+
+
+def _parse_disk_mounts(spec: str | None) -> tuple[DiskTarget, ...] | None:
+    """Parse ``HALO_DISK_MOUNTS`` into a tuple of ``DiskTarget`` (or ``None``).
+
+    Format: ``;``-separated entries, each ``label=path`` or a bare ``path`` (label
+    then defaults to the path). ``;`` is the separator because mount paths may
+    contain spaces (e.g. ``/run/media/user/새 볼륨``) but not semicolons. An empty
+    value (``HALO_DISK_MOUNTS=``) disables the widget (returns an empty tuple).
+    ``None`` (unset) means "use the default mounts".
+    """
+    if spec is None:
+        return None
+    entries: list[DiskTarget] = []
+    for raw in spec.split(";"):
+        entry = raw.strip()
+        if not entry:
+            continue
+        if "=" in entry:
+            label, _, path = entry.partition("=")
+            label, path = label.strip(), path.strip()
+            entries.append(DiskTarget(path=path, label=label or path))
+        else:
+            entries.append(DiskTarget(path=entry, label=entry))
+    return tuple(entries)
+
+
 def config_from_env(
     env: Mapping[str, str] | None = None,
     *,
@@ -70,6 +128,7 @@ def config_from_env(
     lang = "en" if env.get("HALO_LANG", "ko") == "en" else "ko"
     if lang_override in ("ko", "en"):
         lang = lang_override
+    mounts = _parse_disk_mounts(env.get("HALO_DISK_MOUNTS"))
     cfg = Config(
         log_dir=env.get("HALO_LOG_DIR", os.path.expanduser("~/gpu_jobs/logs")),
         unit_glob=env.get("HALO_UNIT_GLOB", "gpujob-*"),
@@ -77,6 +136,9 @@ def config_from_env(
         pool_gb=_int(env, "HALO_POOL_GB", 60),
         heldout_total=_int(env, "HALO_HELDOUT_TOTAL", 7),
         lang=lang,
+        disk_mounts=DEFAULT_DISK_MOUNTS if mounts is None else mounts,
+        disk_warn_free_gb=_float(env, "HALO_DISK_WARN_GB", 10.0),
+        disk_warn_free_pct=_float(env, "HALO_DISK_WARN_PCT", 5.0),
     )
     return cfg
 

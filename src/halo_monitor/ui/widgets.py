@@ -7,9 +7,10 @@ rendered values are byte-identical.
 from __future__ import annotations
 
 import time
+import unicodedata
 from typing import Callable
 
-from ..model import JobState, JobType, ModelInfo, Phase
+from ..model import DiskStat, JobState, JobType, ModelInfo, Phase
 from . import i18n
 from .theme import Theme
 
@@ -113,3 +114,53 @@ def done_time(job: JobState, ts: float, localtime: Callable = time.localtime) ->
     if job.eta_seconds is None:
         return "—"
     return time.strftime("%H:%M", localtime(ts + job.eta_seconds))
+
+
+# --- disk widget (Phase 5) ------------------------------------------------- #
+def _disp_width(s: str) -> int:
+    """Terminal column width of ``s`` (CJK wide/fullwidth glyphs count as 2)."""
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+
+
+def _pad_label(label: str, width: int) -> str:
+    """Right-pad ``label`` with spaces to ``width`` *display* columns."""
+    gap = width - _disp_width(label)
+    return label + " " * gap if gap > 0 else label
+
+
+def disk_flag(low: bool, lang: str, theme: Theme) -> str:
+    """``⚠️위험``/``⚠️LOW`` when a mount is below threshold, else ``✓``.
+
+    Same glyphs as :func:`ram_flag` so the two low-space warnings read alike.
+    """
+    return theme.ram_low_prefix + i18n.t(lang, "ram_low") if low else theme.ram_ok
+
+
+def disk_lines(disks: list[DiskStat], lang: str, theme: Theme) -> list[str]:
+    """One rendered line per configured mount (label columns aligned).
+
+    Present mount::
+
+        ★<label>:   12.3 / 456GB  [███░░░...] 27%   여유 333.0GB ✓
+
+    Absent mount (unmounted / removable drive not connected)::
+
+        ★<label>:   사용불가
+    """
+    if not disks:
+        return []
+    label_w = max(_disp_width(d.label or d.path) for d in disks)
+    free_word = i18n.t(lang, "free")
+    out: list[str] = []
+    for d in disks:
+        head = f"   {theme.star}{_pad_label(d.label or d.path, label_w)}:"
+        if not d.present:
+            out.append(f"{head}   {i18n.t(lang, 'disk_na')}")
+            continue
+        pct = d.used_pct if d.used_pct is not None else 0
+        out.append(
+            f"{head}   {gb1(d.used_bytes):>5} / {gb0(d.total_bytes)}GB  "
+            f"[{bar(pct, theme)}] {pct}%   "
+            f"{free_word} {gb1(d.free_bytes)}GB {disk_flag(d.low, lang, theme)}"
+        )
+    return out

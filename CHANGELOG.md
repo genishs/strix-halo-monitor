@@ -5,8 +5,35 @@
 
 ## [Unreleased]
 
-Phase 5(확장) 예정 — nvidia 백엔드(이슈 #5), 스파크라인, alerts, TOML 설정, `--rich`/`--ascii` 렌더 선택,
-차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임. 아직 커밋된 변경 없음.
+Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, alerts(규칙 일반화), TOML 설정,
+`--rich`/`--ascii` 렌더 선택, 차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임.
+
+## [0.3.0] — 2026-07-30
+
+**Phase 5 확장(1) — 디스크 사용율·여유공간·부족경고 위젯 추가** (task #24). 기존 지표는 무변경.
+
+### Added
+- **디스크 수집기 `collectors/disk.py`** — 대상 마운트별 사용율%·여유공간(GiB)·총량을 수집.
+  **`os.statvfs()` 만 사용**(커널이 캐시하는 여유블록 카운터) — `du`·디렉토리 재귀·파일읽기 전무.
+  틱당 디스크 I/O 사실상 0이라 도는 학습/채점의 스토리지 대역과 경합하지 않는다(**C2 불변식**).
+  마운트 미착탈/부재 시 예외 없이 `present=False`(사용불가)로 우아 강등. `os.statvfs`는 주입 가능(테스트).
+- **경고 임계** — 여유공간이 `disk_warn_free_gb`(기본 10GiB) 미만 **또는** `disk_warn_free_pct`(기본 5%)
+  미만이면 `⚠️위험`/`⚠️LOW` 마커. 순수함수 `disk.is_low()`로 분리해 단위테스트.
+- **설정(`config.py`)** — `DiskTarget`(경로+라벨) + `disk_mounts`(기본: `/mnt/data`·외장모델
+  `/run/media/user/새 볼륨`·`/`) + 두 임계. 환경변수 `HALO_DISK_MOUNTS`(`라벨=경로;...`, 경로 공백 허용,
+  빈 값=끔)·`HALO_DISK_WARN_GB`·`HALO_DISK_WARN_PCT`. 기존 `HALO_*` 하위호환 유지.
+- **모델(`model.py`)** — `DiskStat` dataclass + `Snapshot.disks` + `Flags.disk_low`(any 마운트 경고).
+- **렌더(`ui/`)** — `widgets.disk_lines`(라벨 열을 **표시폭 기준** 정렬, CJK 2칸 처리) + `render`에
+  디스크 섹션(구분선+마운트별 줄). **가산적**: `Snapshot.disks`가 비면 섹션 미출력이라 기존 12줄
+  골든 프레임(바이트 파리티)은 그대로 통과. i18n 한/영(`디스크`/`Disk`, `여유`/`free`, `사용불가`/`unavailable`).
+- **테스트 +25** — `test_disk_collector.py`(statvfs 모킹으로 사용율·여유·경고 임계·부재·설정파싱),
+  `test_disk_render.py`(줄 포맷·경고마커·부재표시·가산성·열 정렬), `test_loop.py`에 disk 통과·플래그·복원력.
+- **legacy `monitor.sh`** — 동일 디스크 섹션 추가(`df -B1`=statvfs, du·재귀 없음). 수치는 Python과 동일.
+
+### Notes
+- **Python↔bash 미세차(의도)**: 라벨 정렬을 Python은 **표시폭**(CJK 2칸), bash는 문자수로 패딩 →
+  한글 라벨이 섞이면 콜론 정렬이 bash에서 약간 어긋난다. 수치·경고·레이아웃 골격은 동일. (DEVLOG Phase 5 참조)
+- `df --output`은 GNU coreutils 전제(기존 `date -d`/`free -m`와 동일 전제). 대상 박스는 Linux.
 
 ## [0.2.1] — 2026-07-18
 

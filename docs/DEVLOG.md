@@ -198,3 +198,42 @@
 ---
 
 <!-- 다음 Phase 기록은 해당 feature 브랜치에서 이 아래에 추가된다. -->
+
+## Phase 5(1) — 디스크 사용율·여유공간·부족경고 위젯 (task #24)
+
+브랜치: `feature/phase-5-disk` (off `develop`) · 리드: 개선생 · 버전 범프 `v0.2.1 → v0.3.0`
+
+Phase 5(확장)의 첫 독립 기능. DESIGN §3 "새 지표 추가" 레시피(수집기 + 모델 필드 + 위젯) 그대로,
+세 파트만 국소 수정하고 나머지는 무영향.
+
+### 한 일
+- **수집기 `collectors/disk.py`**: 마운트별 총량/여유/사용율을 `os.statvfs`로 수집. stateless·non-raising·read-only.
+  `available()`=설정 마운트 유무, `collect()`=`list[DiskStat]`. `os.statvfs`는 생성자 주입(테스트에서 fake).
+- **모델**: `DiskStat`(path·label·total/free/used bytes·used_pct·low·present) + `Snapshot.disks` + `Flags.disk_low`.
+- **설정**: `DiskTarget` + `disk_mounts`(기본 3개) + `disk_warn_free_gb`(10)·`disk_warn_free_pct`(5) +
+  `HALO_DISK_MOUNTS`/`HALO_DISK_WARN_GB`/`HALO_DISK_WARN_PCT` 파싱(`;`·`라벨=경로`, 빈 값=끔).
+- **루프/조립**: `UpdateLoop`에 `disk` 수집기 주입(app.py 배선), 틱마다 `_safe`로 수집→`Snapshot.disks`,
+  `flags.disk_low = any(d.low)`. 수집기가 던져도 루프 불사(해당 틱만 `[]`).
+- **렌더**: `widgets.disk_lines`(표시폭 정렬)+`render` 디스크 섹션. **가산적** — `disks` 비면 미출력.
+- **legacy `monitor.sh`**: 동일 섹션(`df -B1 --output=size,used,avail` = statvfs). 수치 Python과 일치 확인.
+
+### C2 불변식 (학습 간섭 금지) — 설계상 방어
+- 저장소 여유는 **커널이 이미 캐시한 여유블록 카운터**(statvfs)만 읽는다. `du`·디렉토리 워크·파일내용
+  읽기 경로가 **코드에 아예 없다**(수집기 리뷰 체크포인트). 틱당 디스크 I/O ≈ 0 → 도는 학습/채점의
+  스토리지 대역과 경합하지 않는다. 두목이 정확히 이 점을 우려했고, statvfs-only가 그 우려의 구조적 해소다.
+
+### 파리티 — 의도적 미세차 (기록용)
+- **라벨 열 정렬**: Python은 **표시폭**(CJK 글리프 2칸)으로 패딩해 콜론이 정확히 정렬된다. bash는
+  `${#var}`(문자 수)로 패딩 → 한글 라벨(`외장모델` 등)이 섞이면 콜론이 약간 어긋난다. **수치·경고 마커·
+  바·레이아웃 골격은 동일**. bash에 wcwidth가 없어 감수한 차이(값 파리티가 우선). CHANGELOG에도 기재.
+- `df --output`은 GNU coreutils 전제(기존 `date -d`/`free -m`와 동일). 대상 박스 Linux라 문제없음.
+
+### 리드 자체검증 (게이트)
+- **테스트 125개 중 123 통과, +25 신규 전원 통과.** 실패 2건은 **기존부터** 실패하던
+  `test_power_collector`(RAPL 픽스처 `intel-rapl:0/energy_uj` — 콜론 파일명이 이 작업 볼륨(NTFS 공유)에
+  체크아웃 불가). **환경 아티팩트지 코드 문제 아님**이며 이번 변경과 무관(디스크 추가 전 baseline에서도 동일).
+- **라이브 렌더 육안 확인**: 실제 statvfs로 `/mnt/data`·외장·`/` 3줄 정상, 열 정렬·바·여유·✓ OK(ko/en).
+- **bash 섹션 단독 실행**: 수치가 Python판과 바이트 일치(`500.7/701GB` 등), 부재 마운트=`사용불가`.
+- **`.pyz` 재빌드**: `make pyz` → `python3 dist/halo-monitor.pyz --version` = `halo-monitor 0.3.0`.
+- **git fileMode churn**: 작업 볼륨(NTFS)이 전 파일을 755로 보고 → `git config core.fileMode false`(로컬)로
+  실제 콘텐츠 변경만 커밋되게 함. 내용 무변경.

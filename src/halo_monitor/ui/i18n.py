@@ -41,6 +41,9 @@ _LABELS: dict[str, tuple[str, str]] = {
     "ram_low": ("위험", "LOW"),
     "idle": ("대기 중", "idle"),
     "waiting": ("대기중", "waiting"),
+    "disk": ("디스크", "Disk"),
+    "free": ("여유", "free"),
+    "disk_na": ("사용불가", "unavailable"),
 }
 
 _NOTE: dict[EtaNote, tuple[str, str]] = {

@@ -22,7 +22,9 @@ from typing import Callable
 from .collectors.base import CollectContext, Collector
 from .collectors.backends.base import GpuBackend
 from .config import Config
-from .model import ClockStats, Flags, JobState, MemoryStats, PowerStats, RawPower, Snapshot
+from .model import (
+    ClockStats, DiskStat, Flags, JobState, MemoryStats, PowerStats, RawPower, Snapshot,
+)
 
 # A job provider hides systemd detection + parsing behind one call so the loop stays
 # HW/systemd-independent. Wired in app.py to detect.find_active_unit + jobs.parse_job.
@@ -49,6 +51,7 @@ class UpdateLoop:
         memory: Collector,
         power: Collector,
         clocks: Collector,
+        disk: Collector,
         job_provider: JobProvider,
         renderer: Renderer,
     ) -> None:
@@ -57,6 +60,7 @@ class UpdateLoop:
         self.memory = memory
         self.power = power
         self.clocks = clocks
+        self.disk = disk
         self.job_provider = job_provider
         self.renderer = renderer
 
@@ -112,11 +116,13 @@ class UpdateLoop:
         power = self._watts(raw, dt)
 
         clk: ClockStats = _safe(lambda: self.clocks.collect(self.ctx), ClockStats())
+        disks: list[DiskStat] = _safe(lambda: self.disk.collect(self.ctx), [])
         job: JobState | None = _safe(lambda: self.job_provider(now_wall), None)
 
         flags = Flags(
             ram_low=(mem.ram_free_gb is not None and mem.ram_free_gb < _RAM_LOW_GB),
             has_error=bool(job and job.error_count),
+            disk_low=any(d.low for d in disks),
         )
         return Snapshot(
             ts=now_wall,
@@ -125,6 +131,7 @@ class UpdateLoop:
             memory=mem,
             power=power,
             clocks=clk,
+            disks=disks,
             flags=flags,
         )
 

@@ -9,7 +9,9 @@ import _util  # noqa: F401
 
 from halo_monitor.config import config_from_env
 from halo_monitor.loop import UpdateLoop
-from halo_monitor.model import ClockStats, JobState, JobType, MemoryStats, RawPower
+from halo_monitor.model import (
+    ClockStats, DiskStat, JobState, JobType, MemoryStats, RawPower,
+)
 
 
 class _Fake:
@@ -27,7 +29,7 @@ class _Fake:
         return v
 
 
-def make_loop(mem, raw, clk, job=None):
+def make_loop(mem, raw, clk, job=None, disks=None):
     cfg = config_from_env(env={})
     return UpdateLoop(
         cfg,
@@ -35,6 +37,7 @@ def make_loop(mem, raw, clk, job=None):
         memory=_Fake(mem),
         power=_Fake(raw),
         clocks=_Fake(clk),
+        disk=_Fake([] if disks is None else disks),
         job_provider=lambda now: job,
         renderer=lambda snap: None,
     )
@@ -83,7 +86,26 @@ class TestLoopDeltas(unittest.TestCase):
         snap = loop.tick(0.0, 1000.0)
         self.assertTrue(snap.flags.ram_low)                  # 1.5 < 3.0
         self.assertTrue(snap.flags.has_error)                # error_count > 0
+        self.assertFalse(snap.flags.disk_low)                # no disks -> not low
         self.assertEqual(snap.ts, 1000.0)
+
+    def test_disk_low_flag_and_passthrough(self):
+        disks = [
+            DiskStat(path="/", label="/", total_bytes=100, free_bytes=90, low=False),
+            DiskStat(path="/mnt/data", label="/mnt/data",
+                     total_bytes=100, free_bytes=1, low=True),
+        ]
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), disks=disks)
+        snap = loop.tick(0.0, 1000.0)
+        self.assertEqual(snap.disks, disks)                  # collected into Snapshot
+        self.assertTrue(snap.flags.disk_low)                 # any(d.low) -> True
+
+    def test_disk_collector_raising_is_survived(self):
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats())
+        loop.disk = _Fake(RuntimeError("statvfs boom"))
+        snap = loop.tick(0.0, 1000.0)                        # must not raise
+        self.assertEqual(snap.disks, [])                     # blank for the tick
+        self.assertFalse(snap.flags.disk_low)
 
 
 if __name__ == "__main__":
