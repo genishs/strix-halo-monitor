@@ -282,3 +282,52 @@ Phase 5(확장)의 두 번째 독립 기능. 디스크 기능과 **완전히 같
 - **bash 섹션 단독 실행**: 수치·포맷이 Python판과 일치(`↓ 11.2 MB/s ↑ 0.4 MB/s (누적 …)`), 첫 틱은 `?`.
 - **`.pyz` 재빌드**: `make pyz` → `python3 dist/halo-monitor.pyz --version` = `halo-monitor 0.4.0`, 라이브
   네트워크 줄 렌더 확인.
+
+## Phase 5(3) — 채점(eval/grading) 진행 표시 + 라우팅 버그 수정 (task #24 연장)
+
+브랜치: `feature/phase-5-disk` (디스크·네트워크 위에 이어서) · 리드: 개선생 · 버전 범프 `v0.4.0 → v0.5.0`
+
+두목 요청: "모니터에서 채점 진행이 안 보인다 → 보이게, 가능한 한 표준 용어로."
+
+### 진단 (먼저 실측)
+- **(a) 글로브**: `UNIT_GLOB='gpujob-*'` → `gpujob-grade141b-*` **잡음**(감지·로그읽기 정상).
+- **(b) 파서 매칭**: ❌ — `ScoreParser.matches()`가 유닛명에 `"score"`만 확인. 유닛은 `grade141b` →
+  **TrainParser(catch-all)로 오라우팅** → 학습잡으로 오인, `🔧 양자화 1620/1624`에서 멈춤. 라이브 재현으로 확정.
+- **출력 포맷**: 신 `eval_hard_tsc.py`(개동생 `--batch-size` 개조)는 `batch-decode: 7개→5버킷`,
+  `generated [name] N chars (in=.. new=..)`(태스크당), `running tsc`, `[label] CLEAN n/m ... SCORE g/m = pct%`,
+  `saved →`. `generated [` 카운팅은 **이미** 구·신 공통. **eval 자체 print엔 타임스탬프 없음**(HQQ 양자화기만
+  `[HH:MM:SS]` 접두) → tok/s·ETA는 로그만으론 불가 → 루프 관측.
+
+### 한 일
+- **라우팅 수정(핵심)**: `ScoreParser.matches()`를 `score`/`grade`/`eval` 별칭 전체로. bash도 동일.
+- **eval 스크레이프**: `_scrape.eval_progress` — cur_task, 누적 토큰(`new=` 합), compiling, 최종 SCORE/CLEAN.
+- **루프 관측**: `_eval_progress()` — 생성단계 첫 관측 시각을 잡아 tok/s(누적토큰/관측경과)·ETA(생성스코프 선형)
+  산출. **from-zero 가드**: 관측 시작 시 0태스크가 아니면 tok/s를 `—`로 숨김(못 본 구간 과대추정 방지).
+  관측 ETA를 main ETA 라인에도 반영(위젯과 일치). 유닛 바뀌면 관측상태 리셋.
+- **모델**: `EvalProgress`+`EvalPhase`+`Snapshot.eval`; `JobState.cur_task/gen_tokens/eval_*`; `ModelInfo.eval_label`.
+- **렌더**: 가산적 평가 섹션(디스크·네트워크와 동일 규칙). 표준 용어 `task N/7`·`tok/s`·`ETA (관측)`·`score`. 한/영.
+- **라벨**: `smodel`이 `--label`(=`mixtral141b-heldout7`) 우선 → `--base` 공백경로 basename 잘림("새") 회피.
+- **legacy monitor.sh**: 라우팅+라벨+관측 tok/s(가드)+task N/7+현재태스크+종료 SCORE. 로그 읽기만.
+
+### C2 불변식 (도는 채점·다운로드 간섭 금지)
+- 채점 진행은 **유닛 로그 파일만 읽어** 파싱한다(`detect.read_log_text`, 기존 read-only 하드게이트 그대로).
+  systemctl은 화이트리스트(list-units/is-active/show)만. **로그 tail·추가 프로세스·GPU 접근 전무** → 도는
+  141B 채점이나 123B 다운로드와 경합하지 않는다. tok/s·ETA도 순수 관측(모니터 자체 시계)이라 무간섭.
+
+### 설계 판단 (기록용)
+- **채점=평가=eval 동일 잡**: 유닛명이 score→grade로 표류. 그래서 별칭 매칭 + 표준어 "eval".
+- **관측 위치=루프**: eval 로그에 타임스탬프가 없어 throughput/ETA는 틱 간 관측 필수 → "루프가 시간·상태를
+  소유"(모듈 원칙) 그대로. GTT rate·RAPL watts·net rate와 동일 소유권 모델.
+- **버스티 tok/s**: 배치 디코드라 버킷 완료 시 토큰이 몰려 로깅됨 → 순간 델타는 오해 소지 → **관측 평균**으로.
+- **main 진행줄/ETA 미파괴**: 골든 프레임(양자화 12줄 바이트파리티)·scoring phase-line 골든 테스트는
+  `cur_task=None`이라 그대로 통과. 새 표준어 상세는 **가산 위젯**에만.
+
+### 리드 자체검증 (게이트)
+- **테스트 165개 중 163 통과, +15 신규 전원 통과.** 실패 2건은 **기존부터**의 `test_power_collector`
+  (RAPL 픽스처 `intel-rapl:0` 콜론 파일명이 NTFS 볼륨 체크아웃 불가). 환경 아티팩트, 이번 변경과 무관.
+- **라이브(도는 grade141b) 검증**: 오라우팅 재현(`🔧 양자화`) → 수정 후 `🧮 채점 mixtral141b-heldout7 —
+  생성 0/7` + 평가 위젯 `★평가: 태스크 0/7 — tok/s ETA 산정 대기`(생성 막 시작, 정직). 라벨 "새"→"mixtral141b-heldout7".
+- **합성 로그 3/7 관측**: `★평가: 태스크 3/7 현재 task2 25.6 tok/s ETA 0h01m20s (관측)` — tok/s=1536/60,
+  ETA=60×4/3=80s, main ETA도 일치. finished: `완료 7/7 점수 5.50/7 = 78.6%`(ko/en).
+- **bash 라이브**: `🧮 채점 mixtral141b-heldout7 — task 0/7 (— tok/s), 현재: 대기중`, Python과 일치.
+- **`.pyz` 재빌드**: `make pyz` → `halo-monitor 0.5.0`, 라이브 평가 위젯 렌더 확인.

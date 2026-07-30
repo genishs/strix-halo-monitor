@@ -24,6 +24,7 @@ _VALUE_OPTS = {
     "lora_r": re.compile(r"(?:^|\s)--lora-r\s+(\d+)"),
     "epochs": re.compile(r"(?:^|\s)--epochs\s+(\d+)"),
     "adapter": re.compile(r"(?:^|\s)--adapter\s+(\S+)"),
+    "eval_label": re.compile(r"(?:^|\s)--label\s+(\S+)"),
 }
 _FLAG_LORA_MLP = re.compile(r"(?:^|\s)--lora-mlp(?:\s|$)")
 _FLAG_HELDOUT = re.compile(r"(?:^|\s)--heldout(?:\s|$)")
@@ -61,6 +62,7 @@ def parse_command(cmdline: str | None, cfg: Config) -> ModelInfo:
         epochs=_int_opt(cmdline, "epochs"),
         adapter=adapter_bn,
         heldout=bool(_FLAG_HELDOUT.search(cmdline)),
+        eval_label=_str_opt(cmdline, "eval_label"),
     )
 
 

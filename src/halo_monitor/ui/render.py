@@ -128,6 +128,17 @@ def render_frame(
         )
         net_block = [sep_net, *widgets.net_lines(snapshot.net, lang, theme)]
 
+    # 11d. eval/grading section (Phase 5) — additive: present only while an eval job
+    # is generating/scoring, so training runs and the byte-parity golden frames are
+    # unaffected. Standard ML-eval terms (task N/total, tok/s, ETA) live here.
+    eval_block: list[str] = []
+    if snapshot.eval is not None:
+        sep_eval = (
+            f"  {dash * theme.eval_dash_left} {i18n.t(lang, 'eval')} "
+            f"{dash * theme.eval_dash_right}"
+        )
+        eval_block = [sep_eval, *widgets.eval_lines(snapshot.eval, lang, theme)]
+
     # 12. footer
     now = time.strftime("%H:%M:%S", localtime(snapshot.ts))
     footer = (
@@ -137,7 +148,8 @@ def render_frame(
 
     return "\n".join([
         header, l_progress, l_elapsed, l_model, sep_umem, l_gtt,
-        l_vram, l_ram, sep_power, l_power, l_sclk, *disk_block, *net_block, footer,
+        l_vram, l_ram, sep_power, l_power, l_sclk,
+        *disk_block, *net_block, *eval_block, footer,
     ])
 
 

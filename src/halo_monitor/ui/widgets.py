@@ -10,7 +10,7 @@ import time
 import unicodedata
 from typing import Callable
 
-from ..model import DiskStat, JobState, JobType, ModelInfo, NetStat, Phase
+from ..model import DiskStat, EvalPhase, EvalProgress, JobState, JobType, ModelInfo, NetStat, Phase
 from . import i18n
 from .theme import Theme
 
@@ -200,3 +200,50 @@ def net_lines(nets: list[NetStat], lang: str, theme: Theme) -> list[str]:
             f"({total_word} {dn} {gb1(n.rx_session_bytes)}GB {up} {gb1(n.tx_session_bytes)}GB)"
         )
     return out
+
+
+# --- eval / grading widget (Phase 5) --------------------------------------- #
+def tok_s(value: float | None) -> str:
+    """Throughput in tok/s to one decimal (``—`` when not honestly measurable)."""
+    return "—" if value is None else f"{value:.1f}"
+
+
+def eval_lines(ev: EvalProgress | None, lang: str, theme: Theme) -> list[str]:
+    """One rendered line for the active eval/grading run (standard ML eval terms).
+
+    Generating::
+
+        ★평가:   task 3/7   현재 pyexpr_eval   45.2 tok/s   ETA 0h12m30s (관측)
+
+    Compiling / scoring::
+
+        ★평가:   task 7/7   컴파일·채점 중   45.2 tok/s
+
+    Finished::
+
+        ★평가:   완료 7/7   점수 5.50/7 = 78.6%
+    """
+    if ev is None:
+        return []
+    head = f"   {theme.star}{i18n.t(lang, 'eval')}:"
+    done = ev.done if ev.done is not None else 0
+    total = ev.total if ev.total is not None else "?"
+
+    if ev.phase is EvalPhase.FINISHED:
+        body = f"{i18n.t(lang, 'eval_done')} {done}/{total}"
+        if ev.score is not None and ev.max is not None:
+            pct = f" = {ev.pct:.1f}%" if ev.pct is not None else ""
+            body += f"   {i18n.t(lang, 'eval_score')} {ev.score:.2f}/{ev.max}{pct}"
+        return [f"{head}   {body}"]
+
+    parts = [f"{i18n.t(lang, 'eval_task')} {done}/{total}"]
+    if ev.phase is EvalPhase.COMPILING:
+        parts.append(i18n.t(lang, "eval_compiling"))
+    elif ev.cur_task:
+        parts.append(f"{i18n.t(lang, 'eval_cur')} {ev.cur_task}")
+    parts.append(f"{tok_s(ev.tok_s)} tok/s")
+    if ev.eta_s is not None:
+        parts.append(f"ETA {hms(ev.eta_s)} ({i18n.t(lang, 'eval_observed')})")
+    else:
+        parts.append(f"ETA {i18n.t(lang, 'eval_estimating')}")
+    return [f"{head}   " + "   ".join(parts)]

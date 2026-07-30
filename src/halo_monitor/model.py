@@ -87,6 +87,7 @@ class ModelInfo:
     epochs: int | None = None        # --epochs
     adapter: str | None = None       # basename of --adapter (scoring)
     heldout: bool = False            # --heldout present (scoring)
+    eval_label: str | None = None    # --label: eval run name (eval_hard_tsc.py), for display
 
 
 @dataclass
@@ -109,9 +110,16 @@ class JobState:
     total: int | None = None
     loss: float | None = None
     sstep: float | None = None            # seconds per optimizer step
-    gen_done: int | None = None           # scoring: heldout tasks generated
-    heldout_total: int | None = None      # scoring: total heldout tasks
-    last_gen: str | None = None           # scoring: last "generated [...]" line
+    gen_done: int | None = None           # scoring/eval: heldout tasks generated
+    heldout_total: int | None = None      # scoring/eval: total heldout tasks
+    last_gen: str | None = None           # scoring: last "generated [...]" line (verbatim)
+    cur_task: str | None = None           # eval: name of the last generated task (cleaned)
+    gen_tokens: int | None = None         # eval: cumulative generated tokens (sum of new=)
+    eval_compiling: bool = False          # eval: `running tsc` seen (compile/score stage)
+    eval_score: float | None = None       # eval: final SCORE g (from "SCORE g/max = pct%")
+    eval_max: int | None = None           # eval: final SCORE max (task count)
+    eval_pct: float | None = None         # eval: final percentage
+    eval_clean: int | None = None         # eval: clean-compile count (from "CLEAN n/max")
 
     # Raw display strings, preserved verbatim from the log for byte-exact render
     # parity (the log may carry high precision like "1.9119" / "471.0" that a float
@@ -245,6 +253,42 @@ class NetStat:
     present: bool = False
 
 
+class EvalPhase(str, Enum):
+    """Sub-stage of an eval/grading run, for the additive Eval widget (Phase 5)."""
+
+    GENERATING = "generating"   # decoding heldout tasks (task N/total, tok/s)
+    COMPILING = "compiling"     # tsc compile+score of the generated files
+    FINISHED = "finished"       # done — final SCORE available
+
+
+@dataclass
+class EvalProgress:
+    """Detailed progress of an eval/grading job for the additive Eval widget (Phase 5).
+
+    Assembled by ``loop.py`` from the parsed :class:`JobState` PLUS loop-observed
+    timing (the eval script prints no per-line timestamps, so throughput/ETA can only
+    be observed across ticks — same reason GTT-rate/watts/net-rate live in the loop).
+
+    ``tok_s`` is an *observed average* over the generation window the monitor actually
+    watched; it is ``None`` when generation was already underway on the first tick (we
+    can't honestly measure a rate we didn't see start). ``eta_note`` marks the ETA as
+    rough/observed or "still estimating" per the "불확정이면 그렇게 표기" requirement.
+    """
+
+    label: str | None = None            # eval run label (--label) or unit name
+    done: int | None = None             # tasks generated so far
+    total: int | None = None            # heldout total (e.g. 7)
+    cur_task: str | None = None         # last generated task name
+    phase: EvalPhase = EvalPhase.GENERATING
+    tok_s: float | None = None          # observed avg throughput (loop); None if unmeasurable
+    eta_s: int | None = None            # observed ETA seconds (generation-scoped)
+    eta_note: EtaNote | None = None     # rough/observed vs estimating
+    score: float | None = None          # final SCORE g (when finished)
+    max: int | None = None              # final SCORE max
+    pct: float | None = None            # final percentage
+    clean: int | None = None            # clean-compile count
+
+
 @dataclass
 class Flags:
     """Alert/threshold flags computed from a Snapshot (alerts.py, Phase 5)."""
@@ -267,4 +311,5 @@ class Snapshot:
     clocks: ClockStats = field(default_factory=ClockStats)
     disks: list[DiskStat] = field(default_factory=list)
     net: list[NetStat] = field(default_factory=list)
+    eval: EvalProgress | None = None       # present only for an active eval/grading job
     flags: Flags = field(default_factory=Flags)

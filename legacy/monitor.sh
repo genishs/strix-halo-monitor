@@ -103,6 +103,9 @@ declare -A net_prev_rx net_prev_tx net_base_rx net_base_tx
 gttmax=$(cat /sys/class/drm/card*/device/mem_info_gtt_total 2>/dev/null | head -1)
 gttmaxg=$(awk "BEGIN{printf \"%.0f\", $gttmax/1073741824}")
 prev_gtt=0; prev_t=$(date +%s)
+# eval/채점 생성단계 관측용(로그에 per-line 타임스탬프 없음 → 반복 간 관측). gen 시작시각과
+# "0태스크에서 관측 시작했는가"(안 그러면 못 본 구간 tok/s를 과대추정하므로 tok/s 숨김).
+eval_gen_start=""; eval_from_zero=0
 # RAPL 전력 도메인 (sudo chmod a+r 후 읽기 가능). package-0=패키지전체(=PPT), 0:0=CPU코어
 PKG=/sys/class/powercap/intel-rapl:0/energy_uj
 CORE=/sys/class/powercap/intel-rapl:0:0/energy_uj
@@ -124,13 +127,19 @@ while true; do
   if [ -n "$rununit" ]; then unit="${rununit%.service}"; else unit=$(basename "$(ls -t "$LOG_DIR"/$UNIT_GLOB.log 2>/dev/null | head -1)" .log 2>/dev/null); fi
   LOG=$(ls -t "$LOG_DIR"/${unit}*.log 2>/dev/null | head -1)
   active=$(systemctl --user is-active "$unit.service" 2>/dev/null)
-  case "$unit" in *score*) is_score=1;; *) is_score=0;; esac
+  # eval/채점 유닛 판별: score/grade/eval 이름 모두 채점(eval_hard_tsc)로 라우팅.
+  # (과거엔 *score*만 봐서 gpujob-grade141b-* 가 학습잡으로 오인돼 채점 진행이 안 보였음.)
+  case "$unit" in *score*|*grade*|*eval*) is_score=1;; *) is_score=0;; esac
+  [ "$is_score" = "1" ] || eval_gen_start=""   # 비채점 잡이면 생성 타이머 초기화(다음 채점 재관측)
   # 현재 학습/채점 중인 모델 정보 (로그의 command : 라인을 파싱; 실패해도 우아하게 빈값)
   cmdline=$(grep -m1 '^command' "$LOG" 2>/dev/null)
   base_raw=$(echo "$cmdline" | grep -oE -e '--base +[^ ]+' | awk '{print $2}')
   base_bn=""; [ -n "$base_raw" ] && base_bn=$(basename "$base_raw")
   base_label=$(base_label_for "$base_bn")
-  smodel="${base_label:-${unit:-?}}"
+  eval_label=$(echo "$cmdline" | grep -oE -e '--label +[^ ]+' | awk '{print $2}')
+  # 채점 표시 라벨: --label(eval 실행명) 우선 → base_label → 유닛명. (--base 경로에 공백이
+  # 있으면 base_bn이 잘리므로 eval_label을 우선한다: /run/media/user/새 볼륨/... → "새")
+  smodel="${eval_label:-${base_label:-${unit:-?}}}"
   nbits=$(echo "$cmdline" | grep -oE -e '--hqq-nbits +[0-9]+' | awk '{print $2}')
   seqv=$(echo "$cmdline" | grep -oE -e '--seq +[0-9]+' | awk '{print $2}')
   maxnew=$(echo "$cmdline" | grep -oE -e '--max-new +[0-9]+' | awk '{print $2}')
@@ -171,15 +180,28 @@ while true; do
     # 채점: 양자화(재사용 quant) → heldout N개 생성 → (재채점 파이프라인은 이 유닛 밖에서 진행될 수 있음)
     replaced=$(grep -c 'HQQ 스트리밍 치환 완료' "$LOG" 2>/dev/null); replaced=${replaced:-0}
     gen_done=$(grep -c 'generated \[' "$LOG" 2>/dev/null); gen_done=${gen_done:-0}
-    last_gen=$(grep -oE 'generated \[.*' "$LOG" 2>/dev/null | tail -1)
+    # 현재/최근 태스크명(신 eval_hard_tsc 포맷 "generated [name   ] N chars ..."에서 이름만)
+    cur_task=$(grep -oE 'generated \[[^]]+' "$LOG" 2>/dev/null | tail -1 | sed 's/generated \[//; s/ *$//')
     if [ "$active" != "active" ]; then
+      eval_gen_start=""
       res=$(systemctl --user show "$unit.service" -p Result --value 2>/dev/null)
-      phase="$(t "⏸ 채점 종료 ($active/$res)" "⏸ Scoring finished ($active/$res)")"
+      score_line=$(grep -oE 'SCORE [0-9.]+/[0-9]+ = [0-9.]+%' "$LOG" 2>/dev/null | tail -1)
+      if [ -n "$score_line" ]; then
+        phase="$(t "⏸ 채점 종료 ($active/$res) — $score_line" "⏸ Eval finished ($active/$res) — $score_line")"
+      else
+        phase="$(t "⏸ 채점 종료 ($active/$res)" "⏸ Eval finished ($active/$res)")"
+      fi
     elif [ "$replaced" -eq 0 ] && [ "$gen_done" -eq 0 ] && [ -n "$quant" ]; then
-      phase="$(t "🔧 채점준비: 양자화 $quant" "🔧 Scoring prep: quantizing $quant")"
-      eta="$(t "채점 전 준비단계" "pre-scoring prep")"
+      eval_gen_start=""
+      phase="$(t "🔧 채점준비: 양자화 $quant" "🔧 Eval prep: quantizing $quant")"
+      eta="$(t "채점 전 준비단계" "pre-eval prep")"
     else
-      phase="$(t "🧮 채점 ${smodel} — 생성 ${gen_done}/${HELDOUT_TOTAL}, 최근: ${last_gen:-대기중}" "🧮 Scoring ${smodel} — generated ${gen_done}/${HELDOUT_TOTAL}, last: ${last_gen:-waiting}")"
+      # 관측 tok/s: 생성단계 첫 관측 시각 기록(0태스크에서 시작했을 때만 신뢰).
+      if [ -z "$eval_gen_start" ]; then eval_gen_start=$(date +%s); [ "$gen_done" -eq 0 ] && eval_from_zero=1 || eval_from_zero=0; fi
+      gen_toks=$(grep -oE 'new=[0-9]+' "$LOG" 2>/dev/null | grep -oE '[0-9]+' | awk '{s+=$1}END{print s+0}')
+      gel=$(( $(date +%s) - eval_gen_start ))
+      toks_s="—"; { [ "$eval_from_zero" = "1" ] && [ "$gel" -gt 1 ] && [ "${gen_toks:-0}" -gt 0 ]; } && toks_s=$(awk "BEGIN{printf \"%.1f\", $gen_toks/$gel}")
+      phase="$(t "🧮 채점 ${smodel} — task ${gen_done}/${HELDOUT_TOTAL} (${toks_s} tok/s), 현재: ${cur_task:-대기중}" "🧮 Eval ${smodel} — task ${gen_done}/${HELDOUT_TOTAL} (${toks_s} tok/s), current: ${cur_task:-waiting}")"
       if [ "$gen_done" -ge 1 ] && [ -n "$start" ] && [ "$start" -gt 0 ] 2>/dev/null; then
         el=$(( $(date +%s) - start ))
         rem=$(( el * (HELDOUT_TOTAL - gen_done) / gen_done ))   # 남은태스크 × (경과/완료태스크) — 선형 외삽, 대략값

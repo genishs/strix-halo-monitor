@@ -7,6 +7,42 @@
 
 Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, alerts(규칙 일반화), TOML 설정,
 `--rich`/`--ascii` 렌더 선택, 차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임.
+공백 포함 `--base` 경로 basename 잘림(예: `/run/media/user/새 볼륨/...` → `새`)은 별건으로 남김
+(eval는 `--label` 우선 표시로 우회). 로그 `[HH:MM:SS]` 타임스탬프 기반 epoch 산정은 여전히 회피(tz 함정).
+
+## [0.5.0] — 2026-07-31
+
+**Phase 5 확장(3) — 채점(eval/grading) 진행 표시 + 라우팅 버그 수정** (task #24 연장). 기존 지표는 무변경.
+
+### Fixed
+- **🔴 채점 유닛 오라우팅**: `ScoreParser.matches()`가 유닛명에 `score`만 확인 → 현재 도는
+  `gpujob-grade141b-*`(개조된 `eval_hard_tsc.py`)가 **학습 파서로 오라우팅**돼 `🔧 양자화`에 멈춘 채
+  채점 진행이 **안 보였다**. 매칭을 `score`/`grade`/`eval` 별칭 전체로 확장해 해결. legacy `monitor.sh`의
+  `case *score*` 도 `*score*|*grade*|*eval*` 로 동일 수정.
+
+### Added
+- **eval 상세 스크레이프(`_scrape.eval_progress`)** — 현재/최근 태스크명, 누적 생성 토큰(`new=` 합),
+  컴파일·채점 단계(`running tsc`), 최종 결과(`CLEAN n/m`, `SCORE g/max = pct%`, `saved →`)를 로그에서 추출.
+  기존 `generated [` 카운팅(구·신 포맷 공통)은 그대로. **로그 읽기 전용 → 도는 채점·다운로드 무간섭(C2)**.
+- **관측 기반 처리량·ETA(`loop.py`)** — eval 로그엔 per-line 타임스탬프가 없어 tok/s·ETA를 **루프가 틱 간
+  관측**(GTT rate·watts·net rate와 동일 소유권). throughput = 누적토큰/관측 생성경과(**0태스크에서 관측
+  시작했을 때만** 표시 — 못 본 구간을 나눠 과대추정하지 않도록, 아니면 `—`). ETA = 관측 생성경과 × 남은/완료
+  태스크(생성단계 스코프 — 유닛 전체 경과가 아니라 88분 양자화를 제외). "관측/rough" 또는 "산정 대기"로 표기.
+  관측 ETA는 main ETA 라인에도 반영해 위젯과 일치.
+- **모델(`model.py`)** — `EvalProgress` dataclass + `EvalPhase`(generating/compiling/finished) + `Snapshot.eval`.
+  `JobState`에 `cur_task`·`gen_tokens`·`eval_compiling`·`eval_score/max/pct/clean`, `ModelInfo`에 `eval_label`(`--label`).
+- **렌더(`ui/`)** — `widgets.eval_lines` + `render` **가산적** 평가 섹션(`Snapshot.eval` 있을 때만; 학습·골든
+  프레임 무영향, 디스크·네트워크 뒤). **표준 ML 평가 용어**: `task N/7`, `tok/s`, `ETA (관측/observed)`, `score`.
+  i18n 한/영. `smodel`은 `--label`(eval 실행명) 우선 → base_label 잘림("새") 회피. main 진행줄 `최근:`도 태스크명 사용.
+- **테스트 +15** — `test_eval_widget.py`(파서 상세·라우팅·루프 관측 tok/s·ETA·from-zero 가드·유닛변경 리셋·
+  finished·가산 렌더 ko/en), `test_score_parser.py`에 grade/eval 라우팅 회귀.
+- **legacy `monitor.sh`** — 라우팅 수정 + `--label` 우선 표시 + 관측 tok/s(0태스크 관측 가드) + `task N/7`·현재
+  태스크명 + 종료 시 최종 SCORE. 로그 읽기만.
+
+### Notes
+- **채점=평가=eval 동일 잡**: 유닛명이 `score`→`grade`로 표류했을 뿐 `eval_hard_tsc.py` 동일. 배치 디코드
+  (`--batch-size`)로 태스크가 버킷 단위로 완료돼 `task N/7`은 버킷 크기만큼 점프한다(버스티). 그래서 tok/s는
+  순간 델타가 아닌 **관측 평균**으로 계산(정직·평활).
 
 ## [0.4.0] — 2026-07-30
 

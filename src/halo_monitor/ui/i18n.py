@@ -47,6 +47,14 @@ _LABELS: dict[str, tuple[str, str]] = {
     "network": ("네트워크", "Network"),
     "net_total": ("누적", "total"),
     "net_na": ("사용불가", "unavailable"),
+    "eval": ("평가", "Eval"),
+    "eval_task": ("태스크", "task"),
+    "eval_cur": ("현재", "current"),
+    "eval_compiling": ("컴파일·채점 중", "compiling & scoring"),
+    "eval_observed": ("관측", "observed"),
+    "eval_estimating": ("산정 대기", "estimating"),
+    "eval_score": ("점수", "score"),
+    "eval_done": ("완료", "done"),
 }
 
 _NOTE: dict[EtaNote, tuple[str, str]] = {
@@ -83,8 +91,18 @@ def _quant_str(done, total) -> str:
 
 
 def smodel(job: JobState) -> str:
-    """Scoring model label: base_label -> unit name -> '?' (monitor.sh precedence)."""
-    return job.model_info.base_label or job.unit_name or "?"
+    """Eval/scoring run label: --label -> base_label -> unit name -> '?'.
+
+    ``eval_label`` (the eval run's own ``--label``) is preferred: it is the clean,
+    standard identifier for the run. base_label is a fallback and can be a truncated
+    path basename when ``--base`` points at a directory whose name contains a space.
+    """
+    return (
+        job.model_info.eval_label
+        or job.model_info.base_label
+        or job.unit_name
+        or "?"
+    )
 
 
 def phase_text(lang: Lang, job: JobState) -> str:
@@ -126,7 +144,9 @@ def phase_text(lang: Lang, job: JobState) -> str:
         return _pick(lang, f"🔧 채점준비: 양자화 {q}", f"🔧 Scoring prep: quantizing {q}")
 
     if p is Phase.SCORING:
-        last = job.last_gen if job.last_gen else t(lang, "waiting")
+        # Prefer the cleaned task name (new eval_hard_tsc format) over the verbose
+        # verbatim "generated [...]" line; fall back to that, then to "waiting".
+        last = job.cur_task or job.last_gen or t(lang, "waiting")
         return _pick(
             lang,
             f"🧮 채점 {smodel(job)} — 생성 {job.gen_done}/{job.heldout_total}, 최근: {last}",
