@@ -40,6 +40,10 @@ class Theme:
     power_dash_right: int = 33
     disk_dash_left: int = 34      # Phase 5 disk section separator (matches legacy)
     disk_dash_right: int = 34
+    net_dash_left: int = 33       # Phase 5 network section separator ("네트워크"=8 cols)
+    net_dash_right: int = 33
+    net_down: str = "↓"           # RX / download arrow
+    net_up: str = "↑"             # TX / upload arrow
     # status flags
     ram_ok: str = "✓"
     ram_low_prefix: str = "⚠️"

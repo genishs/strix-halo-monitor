@@ -8,6 +8,37 @@
 Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, alerts(규칙 일반화), TOML 설정,
 `--rich`/`--ascii` 렌더 선택, 차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임.
 
+## [0.4.0] — 2026-07-30
+
+**Phase 5 확장(2) — 네트워크 처리량(다운로드/업로드 속도) 위젯 추가** (task #24 연장). 기존 지표는 무변경.
+
+### Added
+- **네트워크 수집기 `collectors/network.py`** — 활성 인터페이스별 RX/TX 바이트 카운터를 수집.
+  **`/sys/class/net/<iface>/statistics/{rx,tx}_bytes` 커널 카운터만 읽기** — 패킷 캡처·`tcpdump`·소켓·외부호출
+  전무. 틱당 네트워크 I/O ≈ 0이라 도는 학습/채점이나 대용량 모델 다운로드의 링크와 경합하지 않는다(**C2 불변식**).
+  인터페이스 부재/개명/권한 시 예외 없이 `present=False`(사용불가)로 우아 강등. 인터페이스 해석(자동감지)도
+  주입된 루트의 sysfs/procfs만 읽어 테스트 결정적.
+- **인터페이스 자동감지** — 미지정 시 기본경로(default route) 인터페이스를 `/proc/net/route`에서 감지
+  (`net_auto="default"`, 없으면 모든 비-loopback으로 폴백), `net_auto="all"`이면 모든 비-loopback.
+- **속도·세션 누적(`loop.py`)** — 속도 = 카운터 델타 / 경과시간. **직전 카운터·최초 카운터를 루프가 상태로 보관**
+  (GTT rate·RAPL watts와 동일 소유권 모델). 카운터 리셋(음수 델타)은 그 틱 속도 `None`(RAPL 랩어라운드와 동일 처리).
+  세션 누적 RX/TX = 모니터 시작 이후 증가분.
+- **설정(`config.py`)** — `NetTarget`(이름+라벨) + `net_ifaces`(None=자동, `()`=끔, 명시=지정) + `net_auto`.
+  환경변수 `HALO_NET_IFACES`(`라벨=이름;...`, 빈 값=끔)·`HALO_NET_AUTO`(`default`|`all`). 기존 `HALO_*` 하위호환 유지.
+- **모델(`model.py`)** — `RawNetIface`(raw 카운터, stateless) + `NetStat`(파생: 속도·세션누적) + `Snapshot.net`.
+- **렌더(`ui/`)** — `widgets.net_lines`(라벨 열 표시폭 정렬, `↓`/`↑` 화살표) + `render`에 네트워크 섹션(구분선 +
+  인터페이스별 줄). **가산적**: `Snapshot.net`이 비면 섹션 미출력 → 기존 12줄 골든 프레임(바이트 파리티)·디스크
+  블록 그대로 통과. 디스크 블록 **뒤에** 배치. i18n 한/영(`네트워크`/`Network`, `누적`/`total`, `사용불가`/`unavailable`).
+- **테스트 +25** — `test_network_collector.py`(임시 sysfs/procfs 트리로 명시·자동감지(기본경로/all)·카운터읽기·부재·
+  설정파싱), `test_network_render.py`(줄 포맷·가산성·디스크 뒤 배치·부재·정렬), `test_loop.py`에 네트워크
+  델타(2샘플 필요·카운터리셋 skip·세션누적·부재통과·수집기 예외 복원력).
+- **legacy `monitor.sh`** — 동일 네트워크 섹션 추가(`/sys/class/net/*/statistics` 카운터 델타). 수치·포맷 Python과 일치.
+
+### Notes
+- **Python↔bash 미세차(의도, 디스크와 동일)**: 라벨 정렬을 Python은 **표시폭**(CJK 2칸), bash는 문자수로 패딩.
+  인터페이스명은 통상 ASCII라 실무상 동일하게 정렬된다. 수치·화살표·레이아웃 골격은 동일.
+- 자동감지는 `/proc/net/route`(기본경로)·`/sys/class/net`(비-loopback 목록) 전제 — 대상 박스는 Linux.
+
 ## [0.3.0] — 2026-07-30
 
 **Phase 5 확장(1) — 디스크 사용율·여유공간·부족경고 위젯 추가** (task #24). 기존 지표는 무변경.

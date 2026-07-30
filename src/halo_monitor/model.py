@@ -204,6 +204,48 @@ class DiskStat:
 
 
 @dataclass
+class RawNetIface:
+    """Raw, *stateless* per-interface byte counters (collectors/network.py, Phase 5).
+
+    The counters are the kernel's own cumulative-since-boot totals read straight
+    from ``/sys/class/net/<name>/statistics/{rx,tx}_bytes`` — reading them costs no
+    packet capture and never touches the wire (C2 invariant). Turning the counter
+    delta into a throughput rate, and computing session totals, is ``loop.py``'s
+    job (DESIGN §2.2 F); this collector keeps NO previous-sample reference.
+
+    ``present`` is False when the interface's statistics could not be read (iface
+    absent / renamed / permission) — reported as unavailable, never as an error.
+    """
+
+    name: str
+    label: str | None = None         # display label; falls back to name (renderer)
+    rx_bytes: int | None = None      # cumulative received bytes (since boot)
+    tx_bytes: int | None = None      # cumulative transmitted bytes (since boot)
+    present: bool = False
+
+
+@dataclass
+class NetStat:
+    """Per-interface network throughput for one active interface (Phase 5).
+
+    Derived by ``loop.py`` from two successive :class:`RawNetIface` samples: the
+    download/upload *rates* are the byte-counter delta over the tick interval, and
+    the session totals are the counter's growth since the monitor started. A
+    counter reset/wraparound (negative delta) yields ``None`` for that rate this
+    tick, matching the RAPL-watts wraparound handling. ``present`` mirrors the raw
+    reading so the renderer shows a missing interface as unavailable.
+    """
+
+    name: str
+    label: str | None = None          # display label; falls back to name
+    rx_mb_s: float | None = None      # download rate over the tick (MB/s)
+    tx_mb_s: float | None = None      # upload rate over the tick (MB/s)
+    rx_session_bytes: int | None = None  # cumulative received since monitor start
+    tx_session_bytes: int | None = None  # cumulative transmitted since monitor start
+    present: bool = False
+
+
+@dataclass
 class Flags:
     """Alert/threshold flags computed from a Snapshot (alerts.py, Phase 5)."""
 
@@ -224,4 +266,5 @@ class Snapshot:
     power: PowerStats = field(default_factory=PowerStats)
     clocks: ClockStats = field(default_factory=ClockStats)
     disks: list[DiskStat] = field(default_factory=list)
+    net: list[NetStat] = field(default_factory=list)
     flags: Flags = field(default_factory=Flags)

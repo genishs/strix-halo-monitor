@@ -10,7 +10,7 @@ import time
 import unicodedata
 from typing import Callable
 
-from ..model import DiskStat, JobState, JobType, ModelInfo, Phase
+from ..model import DiskStat, JobState, JobType, ModelInfo, NetStat, Phase
 from . import i18n
 from .theme import Theme
 
@@ -162,5 +162,41 @@ def disk_lines(disks: list[DiskStat], lang: str, theme: Theme) -> list[str]:
             f"{head}   {gb1(d.used_bytes):>5} / {gb0(d.total_bytes)}GB  "
             f"[{bar(pct, theme)}] {pct}%   "
             f"{free_word} {gb1(d.free_bytes)}GB {disk_flag(d.low, lang, theme)}"
+        )
+    return out
+
+
+# --- network widget (Phase 5) ---------------------------------------------- #
+def net_rate(mb_s: float | None) -> str:
+    """Throughput in MB/s to one decimal (``?`` when unknown/first tick)."""
+    return "?" if mb_s is None else f"{mb_s:.1f}"
+
+
+def net_lines(nets: list[NetStat], lang: str, theme: Theme) -> list[str]:
+    """One rendered line per active interface (label columns aligned).
+
+    Present interface::
+
+        ★<label>:   ↓    12.3 MB/s   ↑     1.2 MB/s   (누적 ↓ 4.5GB ↑ 0.3GB)
+
+    Absent interface (down / renamed / unreadable)::
+
+        ★<label>:   사용불가
+    """
+    if not nets:
+        return []
+    label_w = max(_disp_width(n.label or n.name) for n in nets)
+    total_word = i18n.t(lang, "net_total")
+    dn, up = theme.net_down, theme.net_up
+    out: list[str] = []
+    for n in nets:
+        head = f"   {theme.star}{_pad_label(n.label or n.name, label_w)}:"
+        if not n.present:
+            out.append(f"{head}   {i18n.t(lang, 'net_na')}")
+            continue
+        out.append(
+            f"{head}   {dn} {net_rate(n.rx_mb_s):>7} MB/s   "
+            f"{up} {net_rate(n.tx_mb_s):>7} MB/s   "
+            f"({total_word} {dn} {gb1(n.rx_session_bytes)}GB {up} {gb1(n.tx_session_bytes)}GB)"
         )
     return out

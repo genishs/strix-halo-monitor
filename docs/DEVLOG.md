@@ -237,3 +237,48 @@ Phase 5(확장)의 첫 독립 기능. DESIGN §3 "새 지표 추가" 레시피(�
 - **`.pyz` 재빌드**: `make pyz` → `python3 dist/halo-monitor.pyz --version` = `halo-monitor 0.3.0`.
 - **git fileMode churn**: 작업 볼륨(NTFS)이 전 파일을 755로 보고 → `git config core.fileMode false`(로컬)로
   실제 콘텐츠 변경만 커밋되게 함. 내용 무변경.
+
+## Phase 5(2) — 네트워크 처리량(다운로드/업로드 속도) 위젯 (task #24 연장)
+
+브랜치: `feature/phase-5-disk` (디스크 기능 위에 이어서) · 리드: 개선생 · 버전 범프 `v0.3.0 → v0.4.0`
+
+Phase 5(확장)의 두 번째 독립 기능. 디스크 기능과 **완전히 같은 패턴**(DESIGN §3 "새 지표 추가": 수집기 +
+모델 필드 + 위젯). 다만 속도는 델타가 필요해 **raw/파생 분리 + 루프 상태** 모델(RAPL watts·GTT rate와 동일)을 썼다.
+
+### 한 일
+- **수집기 `collectors/network.py`**: 인터페이스별 `rx_bytes`/`tx_bytes`를 `/sys/class/net/*/statistics`에서 수집.
+  stateless·non-raising·read-only. `available()`=인터페이스 목록이 명시적으로 `()`로 비워졌으면 끔, 그 외 켬.
+  `collect()`=`list[RawNetIface]`. 인터페이스 해석(명시/자동)도 이 안에서: 자동=`/proc/net/route` 기본경로 →
+  없으면 `/sys/class/net` 비-loopback 전체, `net_auto="all"`이면 무조건 비-loopback 전체.
+- **모델**: `RawNetIface`(name·label·rx/tx bytes·present, raw 카운터) + `NetStat`(name·label·rx/tx MB/s·
+  세션누적 bytes·present, 파생) + `Snapshot.net`.
+- **설정**: `NetTarget` + `net_ifaces`(None=자동 / `()`=끔 / 명시) + `net_auto`(default|all) +
+  `HALO_NET_IFACES`(`라벨=이름;`, 빈 값=끔)·`HALO_NET_AUTO` 파싱. 디스크 위젯 env 스타일과 대칭.
+- **루프/조립**: `UpdateLoop`에 `network` 수집기 주입(app.py 배선). 루프가 **직전 카운터**(`_prev_net`, 속도용)와
+  **최초 카운터**(`_net_baseline`, 세션누적용)를 이름별 dict로 보관. `_net_stats()`가 raw→NetStat 변환:
+  속도=델타/dt(dt는 GTT·watts와 공유하는 그 틱 경과), 음수 델타(카운터 리셋)=속도 `None`, 세션누적=최초 대비 증가분.
+  수집기가 던져도 루프 불사(해당 틱만 `[]`), 부재 인터페이스는 prev 정리 후 `present=False` 통과.
+- **렌더**: `widgets.net_lines`(표시폭 정렬, `↓`/`↑`)+`render` 네트워크 섹션. **가산적** — `net` 비면 미출력.
+  디스크 블록 **뒤**에 배치(순서: sclk → 디스크 → 네트워크 → 푸터).
+- **legacy `monitor.sh`**: 동일 섹션. 이름별 연관배열(`declare -A net_prev_*`/`net_base_*`)로 직전·최초 카운터
+  보관, `awk` 델타로 속도 계산. 라이브에서 Python과 포맷·수치 일치 확인(`↓ 10.0 MB/s ↑ 0.4 MB/s` 등).
+
+### C2 불변식 (학습·다운로드 간섭 금지) — 설계상 방어
+- 처리량을 **커널이 이미 세는 누적 바이트 카운터**(`/sys/class/net/*/statistics/{rx,tx}_bytes`)만 읽는다.
+  **패킷 캡처·`tcpdump`·`ip`/`ethtool` 호출·소켓 오픈 경로가 코드에 아예 없다**(수집기 리뷰 체크포인트).
+  틱당 네트워크 I/O ≈ 0 → 도는 학습/채점이나 **대용량 모델 다운로드**의 링크 대역과 경합하지 않는다.
+  두목이 우려한 "학습·다운로드 무간섭"의 구조적 해소(디스크 statvfs-only와 같은 성격).
+
+### 파리티 — 의도적 미세차 (디스크와 동일, 기록용)
+- 라벨 열 정렬: Python은 표시폭(CJK 2칸), bash는 문자수 패딩. **인터페이스명은 통상 ASCII**라 실무상 정렬 동일.
+  수치·화살표·바 골격은 동일.
+
+### 리드 자체검증 (게이트)
+- **테스트 150개 중 148 통과, +25 신규 전원 통과.** 실패 2건은 **기존부터** 실패하던
+  `test_power_collector`(RAPL 픽스처 `intel-rapl:0/energy_uj` — 콜론 파일명이 이 작업 볼륨(NTFS)에 체크아웃
+  불가). **환경 아티팩트지 코드 문제 아님**이며 이번 변경과 무관(baseline과 동일한 2건).
+- **라이브 렌더 육안 확인**: 실 인터페이스로 자동감지=기본경로 `wlp98s0`(다운로드 실측 ~10 MB/s), `HALO_NET_AUTO=all`=
+  `enx…`+`wlp98s0` 두 줄(lo 제외), 열 정렬·화살표·누적 OK(ko/en). 실제 양자화 잡이 도는 중에도 정상.
+- **bash 섹션 단독 실행**: 수치·포맷이 Python판과 일치(`↓ 11.2 MB/s ↑ 0.4 MB/s (누적 …)`), 첫 틱은 `?`.
+- **`.pyz` 재빌드**: `make pyz` → `python3 dist/halo-monitor.pyz --version` = `halo-monitor 0.4.0`, 라이브
+  네트워크 줄 렌더 확인.

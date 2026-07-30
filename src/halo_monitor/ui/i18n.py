@@ -44,6 +44,9 @@ _LABELS: dict[str, tuple[str, str]] = {
     "disk": ("디스크", "Disk"),
     "free": ("여유", "free"),
     "disk_na": ("사용불가", "unavailable"),
+    "network": ("네트워크", "Network"),
+    "net_total": ("누적", "total"),
+    "net_na": ("사용불가", "unavailable"),
 }
 
 _NOTE: dict[EtaNote, tuple[str, str]] = {

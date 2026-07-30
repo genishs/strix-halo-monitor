@@ -15,6 +15,7 @@ from .collectors.backends import select_backend
 from .collectors.clocks import ClockCollector
 from .collectors.disk import DiskCollector
 from .collectors.memory import MemoryCollector
+from .collectors.network import NetworkCollector
 from .collectors.power import PowerCollector
 from .config import Config, config_from_env
 from .jobs import detect
@@ -50,6 +51,7 @@ def build_loop(cfg: Config, *, out=None) -> UpdateLoop:
         power=PowerCollector(),
         clocks=ClockCollector(),
         disk=DiskCollector(),
+        network=NetworkCollector(),
         job_provider=make_job_provider(cfg),
         renderer=make_renderer(cfg, out=out),
     )

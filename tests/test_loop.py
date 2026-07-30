@@ -10,7 +10,7 @@ import _util  # noqa: F401
 from halo_monitor.config import config_from_env
 from halo_monitor.loop import UpdateLoop
 from halo_monitor.model import (
-    ClockStats, DiskStat, JobState, JobType, MemoryStats, RawPower,
+    ClockStats, DiskStat, JobState, JobType, MemoryStats, RawNetIface, RawPower,
 )
 
 
@@ -29,7 +29,7 @@ class _Fake:
         return v
 
 
-def make_loop(mem, raw, clk, job=None, disks=None):
+def make_loop(mem, raw, clk, job=None, disks=None, net=None):
     cfg = config_from_env(env={})
     return UpdateLoop(
         cfg,
@@ -38,6 +38,7 @@ def make_loop(mem, raw, clk, job=None, disks=None):
         power=_Fake(raw),
         clocks=_Fake(clk),
         disk=_Fake([] if disks is None else disks),
+        network=_Fake([] if net is None else net),
         job_provider=lambda now: job,
         renderer=lambda snap: None,
     )
@@ -106,6 +107,55 @@ class TestLoopDeltas(unittest.TestCase):
         snap = loop.tick(0.0, 1000.0)                        # must not raise
         self.assertEqual(snap.disks, [])                     # blank for the tick
         self.assertFalse(snap.flags.disk_low)
+
+
+class TestNetDeltas(unittest.TestCase):
+    def test_net_rate_needs_two_samples(self):
+        MB = 1048576
+        seq = [
+            [RawNetIface(name="eth0", label="eth0", rx_bytes=100 * MB,
+                         tx_bytes=10 * MB, present=True)],
+            [RawNetIface(name="eth0", label="eth0", rx_bytes=130 * MB,
+                         tx_bytes=14 * MB, present=True)],
+        ]
+        it = iter(seq)
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), net=lambda: next(it))
+        s1 = loop.tick(0.0, 1000.0)
+        self.assertIsNone(s1.net[0].rx_mb_s)                 # first tick: no delta
+        self.assertEqual(s1.net[0].rx_session_bytes, 0)      # baseline == current
+        s2 = loop.tick(2.0, 1002.0)
+        self.assertAlmostEqual(s2.net[0].rx_mb_s, 15.0)      # +30MB over 2s
+        self.assertAlmostEqual(s2.net[0].tx_mb_s, 2.0)       # +4MB over 2s
+        self.assertEqual(s2.net[0].rx_session_bytes, 30 * MB)  # since first sight
+
+    def test_net_counter_reset_yields_none_rate(self):
+        MB = 1048576
+        seq = [
+            [RawNetIface(name="wlan0", label="wlan0", rx_bytes=500 * MB,
+                         tx_bytes=50 * MB, present=True)],
+            [RawNetIface(name="wlan0", label="wlan0", rx_bytes=5 * MB,
+                         tx_bytes=1 * MB, present=True)],   # counter reset (iface down/up)
+        ]
+        it = iter(seq)
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), net=lambda: next(it))
+        loop.tick(0.0, 1000.0)
+        s2 = loop.tick(2.0, 1002.0)
+        self.assertIsNone(s2.net[0].rx_mb_s)                 # negative delta -> skip
+        self.assertIsNone(s2.net[0].tx_mb_s)
+
+    def test_net_absent_iface_passthrough(self):
+        net = [RawNetIface(name="eth0", label="eth0", present=False)]
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), net=net)
+        snap = loop.tick(0.0, 1000.0)
+        self.assertFalse(snap.net[0].present)
+        self.assertIsNone(snap.net[0].rx_mb_s)
+        self.assertEqual(snap.net[0].label, "eth0")
+
+    def test_net_collector_raising_is_survived(self):
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats())
+        loop.network = _Fake(RuntimeError("net boom"))
+        snap = loop.tick(0.0, 1000.0)                        # must not raise
+        self.assertEqual(snap.net, [])                       # blank for the tick
 
 
 if __name__ == "__main__":

@@ -81,6 +81,25 @@ for _e in "${_dents[@]}"; do
 done
 disk_maxw=0; for _l in "${disk_labels[@]}"; do [ "${#_l}" -gt "$disk_maxw" ] && disk_maxw=${#_l}; done
 
+# 네트워크 위젯(Phase 5): 표시할 인터페이스와 자동감지 모드.
+#   HALO_NET_IFACES = "라벨=이름;이름;..." (`;` 구분). 미설정=자동감지, 빈 값이면 네트워크섹션 끔.
+#   HALO_NET_AUTO = default(기본경로 인터페이스, 없으면 모든 비-loopback) | all(모든 비-loopback).
+#   /sys/class/net/*/statistics/{rx,tx}_bytes 커널 카운터만 읽음 — tcpdump·패킷캡처 없음(다운로드/학습 I/O 무간섭).
+NET_AUTO="${HALO_NET_AUTO:-default}"; [ "$NET_AUTO" = "all" ] || NET_AUTO="default"
+net_names=(); net_labels=(); net_explicit=0
+if [ -n "${HALO_NET_IFACES+set}" ]; then
+  net_explicit=1
+  IFS=';' read -ra _nents <<< "$HALO_NET_IFACES"
+  for _e in "${_nents[@]}"; do
+    [ -z "$(_trim "$_e")" ] && continue
+    if [[ "$_e" == *"="* ]]; then _lbl="$(_trim "${_e%%=*}")"; _nm="$(_trim "${_e#*=}")";
+    else _nm="$(_trim "$_e")"; _lbl="$_nm"; fi
+    net_names+=("$_nm"); net_labels+=("$_lbl")
+  done
+fi
+# 인터페이스별 직전 카운터(속도용)와 최초 카운터(세션 누적용). 이름으로 키.
+declare -A net_prev_rx net_prev_tx net_base_rx net_base_tx
+
 gttmax=$(cat /sys/class/drm/card*/device/mem_info_gtt_total 2>/dev/null | head -1)
 gttmaxg=$(awk "BEGIN{printf \"%.0f\", $gttmax/1073741824}")
 prev_gtt=0; prev_t=$(date +%s)
@@ -245,6 +264,41 @@ while true; do
         _low=$(awk "BEGIN{ag=$_av/1073741824; ap=$_av/$_sz*100; print (ag<$DISK_WARN_GB||ap<$DISK_WARN_PCT)?1:0}")
         if [ "$_low" = "1" ]; then _flag="⚠️$(t "위험" "LOW")"; else _flag="✓"; fi
         printf "   ★%s:   %5s / %sGB  [%s] %s%%   %s %sGB %s\n" "$_lblpad" "$_usg" "$_szg" "$_bar" "$_pct" "$(t "여유" "free")" "$_avg" "$_flag"
+      fi
+      _i=$((_i+1))
+    done
+  fi
+  # 네트워크: 인터페이스별 다운로드(RX)/업로드(TX) 속도 (커널 카운터 델타만; 패킷캡처·tcpdump 없음 → 다운로드/학습 무간섭)
+  cur_net_names=(); cur_net_labels=()
+  if [ "$net_explicit" = "1" ]; then
+    cur_net_names=("${net_names[@]}"); cur_net_labels=("${net_labels[@]}")
+  else
+    if [ "$NET_AUTO" = "all" ]; then _nl=""; else
+      _nl=$(awk 'NR>1 && $2=="00000000" && $1!="lo"{print $1}' /proc/net/route 2>/dev/null | awk '!s[$0]++'); fi
+    [ -z "$_nl" ] && _nl=$(for _d in /sys/class/net/*; do _n=$(basename "$_d"); [ "$_n" = lo ] && continue; echo "$_n"; done)
+    while IFS= read -r _n; do [ -z "$_n" ] && continue; cur_net_names+=("$_n"); cur_net_labels+=("$_n"); done <<< "$_nl"
+  fi
+  if [ "${#cur_net_names[@]}" -gt 0 ]; then
+    net_maxw=0; for _l in "${cur_net_labels[@]}"; do [ "${#_l}" -gt "$net_maxw" ] && net_maxw=${#_l}; done
+    echo "  ───────────────────────────────── $(t "네트워크" "Network") ─────────────────────────────────"
+    _i=0
+    while [ "$_i" -lt "${#cur_net_names[@]}" ]; do
+      _nm="${cur_net_names[$_i]}"; _lbl="${cur_net_labels[$_i]}"; _lblpad=$(printf "%-${net_maxw}s" "$_lbl")
+      _rx=$(cat "/sys/class/net/$_nm/statistics/rx_bytes" 2>/dev/null)
+      _tx=$(cat "/sys/class/net/$_nm/statistics/tx_bytes" 2>/dev/null)
+      if [ -z "$_rx" ] || [ -z "$_tx" ]; then
+        printf "   ★%s:   %s\n" "$_lblpad" "$(t "사용불가" "unavailable")"
+      else
+        [ -z "${net_base_rx[$_nm]:-}" ] && net_base_rx[$_nm]=$_rx && net_base_tx[$_nm]=$_tx
+        _prx="${net_prev_rx[$_nm]:-}"; _ptx="${net_prev_tx[$_nm]:-}"
+        if [ -n "$_prx" ]; then
+          _rxr=$(awk "BEGIN{d=$_rx-$_prx; if(d<0)printf\"?\";else printf\"%.1f\",d/1048576/$dt}")
+          _txr=$(awk "BEGIN{d=$_tx-$_ptx; if(d<0)printf\"?\";else printf\"%.1f\",d/1048576/$dt}")
+        else _rxr="?"; _txr="?"; fi
+        _rxs=$(awk "BEGIN{printf\"%.1f\",($_rx-${net_base_rx[$_nm]})/1073741824}")
+        _txs=$(awk "BEGIN{printf\"%.1f\",($_tx-${net_base_tx[$_nm]})/1073741824}")
+        printf "   ★%s:   ↓ %7s MB/s   ↑ %7s MB/s   (%s ↓ %sGB ↑ %sGB)\n" "$_lblpad" "$_rxr" "$_txr" "$(t "누적" "total")" "$_rxs" "$_txs"
+        net_prev_rx[$_nm]=$_rx; net_prev_tx[$_nm]=$_tx
       fi
       _i=$((_i+1))
     done

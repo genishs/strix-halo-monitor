@@ -5,4 +5,4 @@ Python migration of the original ``monitor.sh`` (preserved under ``legacy/``).
 See DESIGN.md for the architecture and docs/DEVLOG.md for the migration history.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"

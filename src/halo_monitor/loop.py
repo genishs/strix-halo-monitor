@@ -23,7 +23,8 @@ from .collectors.base import CollectContext, Collector
 from .collectors.backends.base import GpuBackend
 from .config import Config
 from .model import (
-    ClockStats, DiskStat, Flags, JobState, MemoryStats, PowerStats, RawPower, Snapshot,
+    ClockStats, DiskStat, Flags, JobState, MemoryStats, NetStat, PowerStats, RawNetIface,
+    RawPower, Snapshot,
 )
 
 # A job provider hides systemd detection + parsing behind one call so the loop stays
@@ -52,6 +53,7 @@ class UpdateLoop:
         power: Collector,
         clocks: Collector,
         disk: Collector,
+        network: Collector,
         job_provider: JobProvider,
         renderer: Renderer,
     ) -> None:
@@ -61,6 +63,7 @@ class UpdateLoop:
         self.power = power
         self.clocks = clocks
         self.disk = disk
+        self.network = network
         self.job_provider = job_provider
         self.renderer = renderer
 
@@ -69,6 +72,10 @@ class UpdateLoop:
         self._prev_gtt: int | None = None
         self._prev_pkg_uj: int | None = None
         self._prev_core_uj: int | None = None
+        # per-interface previous counters (for rate) and first-seen counters
+        # (for session totals). Keyed by interface name.
+        self._prev_net: dict[str, tuple[int, int]] = {}
+        self._net_baseline: dict[str, tuple[int, int]] = {}
 
         self._stop = False
         self._resized = False
@@ -104,6 +111,45 @@ class UpdateLoop:
                 ps.gpu_w = gpu if gpu > 0 else 0.0
         return ps
 
+    def _net_stats(self, raw: list[RawNetIface], dt: float) -> list[NetStat]:
+        """Per-interface RX/TX byte counters -> throughput (MB/s) + session totals.
+
+        Rate = counter delta / elapsed, mirroring ``_gtt_rate_mb_s``. A negative
+        delta (counter reset, e.g. interface down/up) yields ``None`` for that rate
+        this tick — the same wraparound guard the RAPL-watts path uses. The session
+        total is the counter's growth since the first tick that saw the interface.
+        """
+        out: list[NetStat] = []
+        for r in raw:
+            if not r.present or r.rx_bytes is None or r.tx_bytes is None:
+                # Keep no state for an unreadable interface; drop any stale prev so a
+                # re-appearance re-primes cleanly rather than spiking on a huge delta.
+                self._prev_net.pop(r.name, None)
+                out.append(NetStat(name=r.name, label=r.label, present=False))
+                continue
+
+            prev = self._prev_net.get(r.name)
+            self._prev_net[r.name] = (r.rx_bytes, r.tx_bytes)
+
+            rx_mb_s = tx_mb_s = None
+            if prev is not None and dt > 0:
+                drx, dtx = r.rx_bytes - prev[0], r.tx_bytes - prev[1]
+                if drx >= 0:
+                    rx_mb_s = drx / 1048576.0 / dt
+                if dtx >= 0:
+                    tx_mb_s = dtx / 1048576.0 / dt
+
+            base = self._net_baseline.setdefault(r.name, (r.rx_bytes, r.tx_bytes))
+            rx_session = r.rx_bytes - base[0] if r.rx_bytes >= base[0] else None
+            tx_session = r.tx_bytes - base[1] if r.tx_bytes >= base[1] else None
+
+            out.append(NetStat(
+                name=r.name, label=r.label, present=True,
+                rx_mb_s=rx_mb_s, tx_mb_s=tx_mb_s,
+                rx_session_bytes=rx_session, tx_session_bytes=tx_session,
+            ))
+        return out
+
     # -- one tick --------------------------------------------------------- #
     def tick(self, now_mono: float, now_wall: float) -> Snapshot:
         dt = 0.0 if self._prev_mono is None else max(0.0, now_mono - self._prev_mono)
@@ -117,6 +163,8 @@ class UpdateLoop:
 
         clk: ClockStats = _safe(lambda: self.clocks.collect(self.ctx), ClockStats())
         disks: list[DiskStat] = _safe(lambda: self.disk.collect(self.ctx), [])
+        raw_net: list[RawNetIface] = _safe(lambda: self.network.collect(self.ctx), [])
+        net = self._net_stats(raw_net, dt)
         job: JobState | None = _safe(lambda: self.job_provider(now_wall), None)
 
         flags = Flags(
@@ -132,6 +180,7 @@ class UpdateLoop:
             power=power,
             clocks=clk,
             disks=disks,
+            net=net,
             flags=flags,
         )
 

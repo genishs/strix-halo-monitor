@@ -47,6 +47,26 @@ DEFAULT_DISK_MOUNTS: tuple[DiskTarget, ...] = (
 
 
 @dataclass(frozen=True)
+class NetTarget:
+    """One network interface the throughput widget reports on (DESIGN §3, Phase 5).
+
+    ``label`` is the display name; when ``None`` the renderer shows the raw ``name``
+    (e.g. ``eth0``). Immutable so ``Config`` stays frozen/hashable.
+    """
+
+    name: str
+    label: str | None = None
+
+
+#: How the network collector picks interfaces when none are configured explicitly
+#: (``net_ifaces is None``): "default" = the default-route interface (what actually
+#: reaches the internet), falling back to every non-loopback interface if no default
+#: route is found; "all" = every non-loopback interface unconditionally.
+NET_AUTO_DEFAULT = "default"
+NET_AUTO_ALL = "all"
+
+
+@dataclass(frozen=True)
 class Config:
     """Immutable runtime configuration. Field defaults mirror monitor.sh."""
 
@@ -63,6 +83,11 @@ class Config:
     disk_mounts: tuple[DiskTarget, ...] = DEFAULT_DISK_MOUNTS
     disk_warn_free_gb: float = 10.0      # warn when free space < this many GiB ...
     disk_warn_free_pct: float = 5.0      # ... OR free fraction < this percent
+    # --- network throughput widget (Phase 5) ---
+    #: Explicit interfaces to show. ``None`` = auto-detect via ``net_auto``; an empty
+    #: tuple = widget disabled; a non-empty tuple = show exactly these.
+    net_ifaces: tuple[NetTarget, ...] | None = None
+    net_auto: str = NET_AUTO_DEFAULT     # auto-detect strategy when net_ifaces is None
 
     def base_label_for(self, base_bn: str | None) -> str | None:
         """Map a base-model directory basename to a display label.
@@ -114,6 +139,31 @@ def _parse_disk_mounts(spec: str | None) -> tuple[DiskTarget, ...] | None:
     return tuple(entries)
 
 
+def _parse_net_ifaces(spec: str | None) -> tuple[NetTarget, ...] | None:
+    """Parse ``HALO_NET_IFACES`` into a tuple of ``NetTarget`` (or ``None``).
+
+    Format mirrors ``HALO_DISK_MOUNTS``: ``;``-separated entries, each ``label=name``
+    or a bare ``name`` (label then defaults to the name). Interface names never
+    contain spaces, but ``;`` stays the separator for symmetry with the disk widget.
+    An empty value (``HALO_NET_IFACES=``) disables the widget (empty tuple). ``None``
+    (unset) means "auto-detect" (see ``net_auto``).
+    """
+    if spec is None:
+        return None
+    entries: list[NetTarget] = []
+    for raw in spec.split(";"):
+        entry = raw.strip()
+        if not entry:
+            continue
+        if "=" in entry:
+            label, _, name = entry.partition("=")
+            label, name = label.strip(), name.strip()
+            entries.append(NetTarget(name=name, label=label or name))
+        else:
+            entries.append(NetTarget(name=entry, label=entry))
+    return tuple(entries)
+
+
 def config_from_env(
     env: Mapping[str, str] | None = None,
     *,
@@ -129,6 +179,8 @@ def config_from_env(
     if lang_override in ("ko", "en"):
         lang = lang_override
     mounts = _parse_disk_mounts(env.get("HALO_DISK_MOUNTS"))
+    net_ifaces = _parse_net_ifaces(env.get("HALO_NET_IFACES"))
+    net_auto = NET_AUTO_ALL if env.get("HALO_NET_AUTO") == NET_AUTO_ALL else NET_AUTO_DEFAULT
     cfg = Config(
         log_dir=env.get("HALO_LOG_DIR", os.path.expanduser("~/gpu_jobs/logs")),
         unit_glob=env.get("HALO_UNIT_GLOB", "gpujob-*"),
@@ -139,6 +191,8 @@ def config_from_env(
         disk_mounts=DEFAULT_DISK_MOUNTS if mounts is None else mounts,
         disk_warn_free_gb=_float(env, "HALO_DISK_WARN_GB", 10.0),
         disk_warn_free_pct=_float(env, "HALO_DISK_WARN_PCT", 5.0),
+        net_ifaces=net_ifaces,
+        net_auto=net_auto,
     )
     return cfg
 

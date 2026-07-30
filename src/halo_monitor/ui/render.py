@@ -117,6 +117,17 @@ def render_frame(
         )
         disk_block = [sep_disk, *widgets.disk_lines(snapshot.disks, lang, theme)]
 
+    # 11c. network section (Phase 5) — additive, same rule as the disk block: only
+    # rendered when the snapshot carries interface data, so legacy/disk-only frames
+    # keep their exact layout.
+    net_block: list[str] = []
+    if snapshot.net:
+        sep_net = (
+            f"  {dash * theme.net_dash_left} {i18n.t(lang, 'network')} "
+            f"{dash * theme.net_dash_right}"
+        )
+        net_block = [sep_net, *widgets.net_lines(snapshot.net, lang, theme)]
+
     # 12. footer
     now = time.strftime("%H:%M:%S", localtime(snapshot.ts))
     footer = (
@@ -126,7 +137,7 @@ def render_frame(
 
     return "\n".join([
         header, l_progress, l_elapsed, l_model, sep_umem, l_gtt,
-        l_vram, l_ram, sep_power, l_power, l_sclk, *disk_block, footer,
+        l_vram, l_ram, sep_power, l_power, l_sclk, *disk_block, *net_block, footer,
     ])
 
 
