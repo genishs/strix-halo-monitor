@@ -64,13 +64,17 @@ def render_frame(
         f"{dash * theme.umem_dash_right}"
     )
 
-    # 6. GTT
+    # 6. GTT (+ GPU utilization %, appended only when the amdgpu counter is present so
+    #    the byte-parity golden frames — whose fixtures carry no gpu_busy_pct — are
+    #    unchanged; additive, same principle as the disk/net/eval sections).
     pct = widgets.pct_int(mem.gtt_used_bytes, mem.gtt_total_bytes)
     l_gtt = (
         f"  {star}{i18n.t(lang, 'gtt')}:  {widgets.gb1(mem.gtt_used_bytes):>5} / "
         f"{widgets.gb0(mem.gtt_total_bytes)}GB  [{widgets.bar(pct, theme)}] {pct}%   "
         f"{i18n.t(lang, 'rate')} {widgets.rate(mem.gtt_rate_mb_s)} MB/s"
     )
+    if mem.gpu_busy_pct is not None:
+        l_gtt += f"   {i18n.t(lang, 'gpu_busy')} {mem.gpu_busy_pct}%"
 
     # 7. VRAM
     l_vram = (

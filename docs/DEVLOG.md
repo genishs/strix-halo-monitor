@@ -331,3 +331,41 @@ Phase 5(확장)의 두 번째 독립 기능. 디스크 기능과 **완전히 같
   ETA=60×4/3=80s, main ETA도 일치. finished: `완료 7/7 점수 5.50/7 = 78.6%`(ko/en).
 - **bash 라이브**: `🧮 채점 mixtral141b-heldout7 — task 0/7 (— tok/s), 현재: 대기중`, Python과 일치.
 - **`.pyz` 재빌드**: `make pyz` → `halo-monitor 0.5.0`, 라이브 평가 위젯 렌더 확인.
+
+## Phase 5(4) — GPU 사용율(utilization %) 표시 (task #24 연장)
+
+브랜치: `feature/phase-5-disk` (디스크·네트워크·평가 위에 이어서) · 리드: 개선생 · 버전 범프 `v0.5.0 → v0.6.0`
+
+두목 요청: "GTT(메모리)는 나오는데 GPU busy%가 안 보인다 → 확인 후 추가."
+
+### 진단 (먼저 실측)
+- **(a) 표시 여부**: ❌ — `grep -rniE 'busy|util' src/` 결과 0. 백엔드는 GTT/VRAM/전력/sclk만 읽고 사용율은
+  코드에 없었다. 못 본 게 아니라 실제로 미표시.
+- **소스 확인**: `/sys/class/drm/card1/device/gpu_busy_percent` = 62 (라이브). GTT를 읽는 그 amdgpu
+  카드(card1, `mem_info_gtt_total` 보유)와 **동일 카드**. 같이 읽으면 됨.
+
+### 한 일
+- **백엔드**: `AmdgpuBackend.mem_info()`가 같은 카드에서 `gpu_busy_percent`를 읽어 `MemoryStats.gpu_busy_pct`로
+  채움. `_read_int` 그대로라 부재 시 `None`(우아한 공백). `MemoryCollector`가 그 필드를 통과.
+- **렌더**: GTT 줄 끝에 `gpu_busy_pct is not None`일 때만 `GPU 사용 62%` 덧붙임. **가산적** — 골든 픽스처는
+  이 필드가 없어 12줄 바이트 파리티 프레임 그대로 통과. i18n `GPU 사용`/`GPU busy`.
+- **legacy monitor.sh**: `gpu_busy_percent` 읽어 GTT printf 끝에 값 있을 때만 세그먼트 추가.
+- **픽스처**: `tests/fixtures/sysfs/.../card1/device/gpu_busy_percent`(62). `sysfs_no_rapl`엔 없음(부재 검증).
+
+### C2 불변식 (도는 학습 간섭 금지)
+- `gpu_busy_percent`는 amdgpu가 이미 노출하는 **순간 사용율 커널 카운터**. 파일 하나 읽기(읽기전용)라
+  틱당 비용 ≈ 0, 도는 123B 학습의 연산과 경합하지 않는다. GTT/VRAM와 완전히 같은 성격의 read-only 접근.
+
+### 설계 판단 (기록용)
+- **GTT 줄에 덧붙임 vs 새 섹션**: 두목이 "GPU 라인/블록에 busy% + GTT 함께"를 명시 → GTT 줄 끝에 조건부
+  덧붙이는 방식 선택. 이러면 (1) busy%와 GTT가 한 줄에 함께, (2) 필드 없는 골든 프레임은 바이트 무변경
+  (디스크/네트워크/평가 섹션과 동일한 "데이터 있을 때만" 가산 원칙). 프레임 중간 줄 삽입은 피함.
+- **순간값이라 델타 안 씀**: GTT rate·watts·net rate와 달리 사용율은 이미 %라 루프 상태 불필요.
+- **sclk**: 이미 `sclk: NMhz` 줄에 표시 중 → 중복 없이 그대로.
+
+### 리드 자체검증 (게이트)
+- **테스트 169개 중 167 통과, +4 신규 전원 통과.** 실패 2건은 **기존부터**의 `test_power_collector`
+  (RAPL 픽스처 콜론 파일명 NTFS 체크아웃 불가). 환경 아티팩트, 이번 변경과 무관.
+- **라이브 렌더**: `.pyz` → `★GTT(모델): 26.7 / 56GB [bar] 48% 증가 ? MB/s   GPU 사용 14%`.
+  bash → `... 증가 +27662 MB/s   GPU 사용 2%`. (사용율은 순간값이라 틱마다 변동 — 62%→14%→2% 등.)
+- **`.pyz` 재빌드**: `make pyz` → `halo-monitor 0.6.0`.

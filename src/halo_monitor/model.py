@@ -148,6 +148,8 @@ class MemoryStats:
     ram_free_gb: float | None = None
     swap_used_gb: float | None = None
     gtt_rate_mb_s: float | None = None    # derived over the tick delta (state/loop)
+    gpu_busy_pct: int | None = None       # amdgpu gpu_busy_percent (utilization %), read
+                                          # from the same card as GTT — instantaneous, no delta
 
 
 @dataclass

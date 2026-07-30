@@ -10,6 +10,26 @@ Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, 
 공백 포함 `--base` 경로 basename 잘림(예: `/run/media/user/새 볼륨/...` → `새`)은 별건으로 남김
 (eval는 `--label` 우선 표시로 우회). 로그 `[HH:MM:SS]` 타임스탬프 기반 epoch 산정은 여전히 회피(tz 함정).
 
+## [0.6.0] — 2026-07-31
+
+**Phase 5 확장(4) — GPU 사용율(utilization %) 표시** (task #24 연장). 기존 지표는 무변경.
+
+### Added
+- **GPU 사용율** — `/sys/class/drm/card*/device/gpu_busy_percent`(amdgpu 커널 카운터)를 **GTT를 읽는
+  그 카드에서 함께** 읽어 GTT 줄 끝에 `GPU 사용 62%`(EN `GPU busy 62%`)로 표시. 순간값(델타 불요),
+  **읽기전용·간섭 0(C2)**. `AmdgpuBackend.mem_info()`가 `MemoryStats.gpu_busy_pct`로 채우고
+  `MemoryCollector`가 통과시킴. 커널/카드에 파일이 없으면 `None`(우아한 공백).
+- **렌더(`ui/`)** — GTT 줄에 **값이 있을 때만** 사용율을 덧붙임(가산적) → gpu_busy_pct 없는 골든
+  픽스처의 **바이트 파리티 프레임 무변경**. i18n 한/영(`GPU 사용`/`GPU busy`).
+- **테스트 +4** — 백엔드(사용율 읽기·부재시 None), 메모리 수집기(통과), 렌더(GTT 줄 덧붙임 ko/en·부재시 무변경).
+- **legacy `monitor.sh`** — 동일: `gpu_busy_percent`를 읽어 GTT 줄 끝에 값 있을 때만 표시. 수치·포맷 Python과 일치.
+- **테스트 픽스처** — `tests/fixtures/sysfs/.../card1/device/gpu_busy_percent`(62) 추가. `sysfs_no_rapl`엔
+  일부러 없음(부재 경로 검증).
+
+### Notes
+- **sclk**: 클럭은 기존대로 별도 줄(`sclk: NMhz`)에 이미 표시 중이라 중복 없이 그대로 뒀다(요청의 "여유되면 참고").
+- 사용율은 순간 카운터라 틱마다 크게 변동한다(정상). GTT rate/watts처럼 델타를 쓰지 않는다.
+
 ## [0.5.0] — 2026-07-31
 
 **Phase 5 확장(3) — 채점(eval/grading) 진행 표시 + 라우팅 버그 수정** (task #24 연장). 기존 지표는 무변경.

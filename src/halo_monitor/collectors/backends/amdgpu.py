@@ -112,6 +112,10 @@ class AmdgpuBackend:
             gtt_used_bytes=_read_int(os.path.join(card, "mem_info_gtt_used")),
             gtt_total_bytes=_read_int(os.path.join(card, "mem_info_gtt_total")),
             vram_used_bytes=_read_int(os.path.join(card, "mem_info_vram_used")),
+            # GPU utilization: an amdgpu kernel counter on the same card. Instantaneous
+            # (no delta needed) and read-only, so it costs nothing and never disturbs a
+            # running job. Absent on some kernels/cards -> None (graceful blank).
+            gpu_busy_pct=_read_int(os.path.join(card, "gpu_busy_percent")),
         )
 
     def power(self) -> RawPower:

@@ -36,6 +36,17 @@ class TestAmdgpuBackend(unittest.TestCase):
         self.assertEqual(mem.gtt_used_bytes, 51667468288)
         self.assertEqual(mem.vram_used_bytes, 889708544)
 
+    def test_mem_info_reads_gpu_busy_percent(self):
+        mem = AmdgpuBackend(SYSFS).mem_info()   # fixture gpu_busy_percent = 62
+        self.assertEqual(mem.gpu_busy_pct, 62)
+
+    def test_mem_info_gpu_busy_absent_is_none(self):
+        # sysfs_no_rapl's amdgpu card has no gpu_busy_percent file -> graceful None,
+        # while GTT still reads fine (utilization is an independent optional counter).
+        mem = AmdgpuBackend(SYSFS_NO_RAPL).mem_info()
+        self.assertIsNone(mem.gpu_busy_pct)
+        self.assertEqual(mem.gtt_used_bytes, 40000000000)
+
     def test_power_matches_hwmon_by_name_not_number(self):
         # fixture has hwmon0="k10temp" (decoy) and hwmon1="amdgpu" -- if the
         # backend matched by number it would find nothing at hwmon0.

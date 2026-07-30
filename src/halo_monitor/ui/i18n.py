@@ -28,6 +28,7 @@ _LABELS: dict[str, tuple[str, str]] = {
     "unified_memory": ("통합메모리", "Unified Memory"),
     "gtt": ("GTT(모델)", "GTT(model)"),
     "rate": ("증가", "rate"),
+    "gpu_busy": ("GPU 사용", "GPU busy"),
     "vram": ("전용VRAM", "VRAM(ded.)"),
     "nvtop_note": ("(nvtop이 보는 값)", "(what nvtop sees)"),
     "host_ram": ("host RAM여유", "host RAM free"),

@@ -115,6 +115,8 @@ hms(){ local s=$1; printf "%dh%02dm%02ds" $((s/3600)) $(((s%3600)/60)) $((s%60))
 while true; do
   gtt=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1)
   vram=$(cat /sys/class/drm/card*/device/mem_info_vram_used 2>/dev/null | head -1)
+  # GPU 사용율(amdgpu gpu_busy_percent 커널 카운터, 읽기전용·순간값·간섭0). GTT 읽는 그 카드에서 같이 읽음.
+  gpubusy=$(cat /sys/class/drm/card*/device/gpu_busy_percent 2>/dev/null | head -1)
   gttg=$(awk "BEGIN{printf \"%.1f\", $gtt/1073741824}")
   vramg=$(awk "BEGIN{printf \"%.1f\", $vram/1073741824}")
   pct=$(awk "BEGIN{printf \"%.0f\", $gtt/$gttmax*100}")
@@ -259,7 +261,9 @@ while true; do
   printf "  %s:  %-14s   %s: %s (%s %s)     %s: %s\n" "$(t "경과" "Elapsed")" "$elapsed" "$(t "완료예상" "ETA")" "$donetime" "$(t "남은" "remaining")" "$eta" "$(t "오류" "errors")" "$err"
   printf "  %s:  %s\n" "$(t "모델" "Model")" "${model_line:-?}"
   echo   "  ──────────────────────────────── $(t "통합메모리" "Unified Memory") ────────────────────────────────"
-  printf "  ★%s:  %5s / %sGB  [%s] %s%%   %s %s MB/s\n" "$(t "GTT(모델)" "GTT(model)")" "$gttg" "$gttmaxg" "$bar" "$pct" "$(t "증가" "rate")" "$rate"
+  # GPU 사용율은 값이 있을 때만 GTT 줄 끝에 덧붙임(가산적; 파일 없으면 기존 줄 그대로).
+  gpubusy_seg=""; [ -n "$gpubusy" ] && gpubusy_seg="   $(t "GPU 사용" "GPU busy") ${gpubusy}%"
+  printf "  ★%s:  %5s / %sGB  [%s] %s%%   %s %s MB/s%s\n" "$(t "GTT(모델)" "GTT(model)")" "$gttg" "$gttmaxg" "$bar" "$pct" "$(t "증가" "rate")" "$rate" "$gpubusy_seg"
   printf "   %s:   %5sGB %s     %s\n" "$(t "전용VRAM" "VRAM(ded.)")" "$vramg" "$(t "(nvtop이 보는 값)" "(what nvtop sees)")" "$(t "통합풀 ~${POOL_GB}GB (GTT+host 이 안이어야 안전)" "unified pool ~${POOL_GB}GB (GTT+host must fit)")"
   printf "   %s: %sGB %s     swap: %sGB\n" "$(t "host RAM여유" "host RAM free")" "$ram" "$ramflag" "$swap"
   echo   "  ─────────────────────────────── $(t "전력 · GPU" "Power · GPU") ─────────────────────────────────"
