@@ -135,12 +135,13 @@ while true; do
   [ "$is_score" = "1" ] || eval_gen_start=""   # 비채점 잡이면 생성 타이머 초기화(다음 채점 재관측)
   # 현재 학습/채점 중인 모델 정보 (로그의 command : 라인을 파싱; 실패해도 우아하게 빈값)
   cmdline=$(grep -m1 '^command' "$LOG" 2>/dev/null)
-  base_raw=$(echo "$cmdline" | grep -oE -e '--base +[^ ]+' | awk '{print $2}')
+  # --base 값은 공백 포함 경로일 수 있음(/run/media/user/새 볼륨/<model>). 순진한 [^ ]+ 는
+  # 공백에서 잘려 basename이 "새"가 됐음 → --base 뒤부터 다음 " --플래그"(또는 줄끝)까지 통째로.
+  base_raw=$(echo "$cmdline" | sed -n 's/.*--base \(.*\)/\1/p' | sed 's/ --.*//')
   base_bn=""; [ -n "$base_raw" ] && base_bn=$(basename "$base_raw")
   base_label=$(base_label_for "$base_bn")
   eval_label=$(echo "$cmdline" | grep -oE -e '--label +[^ ]+' | awk '{print $2}')
-  # 채점 표시 라벨: --label(eval 실행명) 우선 → base_label → 유닛명. (--base 경로에 공백이
-  # 있으면 base_bn이 잘리므로 eval_label을 우선한다: /run/media/user/새 볼륨/... → "새")
+  # 채점 표시 라벨: --label(eval 실행명) 우선 → base_label → 유닛명.
   smodel="${eval_label:-${base_label:-${unit:-?}}}"
   nbits=$(echo "$cmdline" | grep -oE -e '--hqq-nbits +[0-9]+' | awk '{print $2}')
   seqv=$(echo "$cmdline" | grep -oE -e '--seq +[0-9]+' | awk '{print $2}')
@@ -148,7 +149,7 @@ while true; do
   lorar=$(echo "$cmdline" | grep -oE -e '--lora-r +[0-9]+' | awk '{print $2}')
   lomlp=$(echo "$cmdline" | grep -oE -e '--lora-mlp')
   epochsv=$(echo "$cmdline" | grep -oE -e '--epochs +[0-9]+' | awk '{print $2}')
-  adapter_raw=$(echo "$cmdline" | grep -oE -e '--adapter +[^ ]+' | awk '{print $2}')
+  adapter_raw=$(echo "$cmdline" | sed -n 's/.*--adapter \(.*\)/\1/p' | sed 's/ --.*//')
   adapter_bn=""; [ -n "$adapter_raw" ] && adapter_bn=$(basename "$adapter_raw")
   heldoutv=$(echo "$cmdline" | grep -oE -e '--heldout')
   model_line=""

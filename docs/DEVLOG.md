@@ -369,3 +369,30 @@ Phase 5(확장)의 두 번째 독립 기능. 디스크 기능과 **완전히 같
 - **라이브 렌더**: `.pyz` → `★GTT(모델): 26.7 / 56GB [bar] 48% 증가 ? MB/s   GPU 사용 14%`.
   bash → `... 증가 +27662 MB/s   GPU 사용 2%`. (사용율은 순간값이라 틱마다 변동 — 62%→14%→2% 등.)
 - **`.pyz` 재빌드**: `make pyz` → `halo-monitor 0.6.0`.
+
+## v0.6.1 — 모델정보 줄 모델명 "새" 버그 수정 (공백 포함 --base 경로)
+
+브랜치: `feature/phase-5-disk` · 리드: 개선생 · 패치 `v0.6.0 → v0.6.1`
+
+두목 보고: 모델정보 줄 모델명이 "새"로만 나온다.
+
+### 진단 (라이브 재확인)
+- 도는 유닛 `gpujob-m123bsmoke-*`의 command: `--base /run/media/user/새 볼륨/mistral-large-2411 --quant ...`.
+- 파서의 `--base` 값 정규식이 `(\S+)` → 공백에서 끊겨 `/run/media/user/새` 캡처 → basename `새`.
+  (채점 유닛도 `.../새 볼륨/mixtral-8x22b-v0.1` 동일 증상.)
+
+### 한 일
+- `modelinfo._PATH_VALUE = r"(?:^|\s)--{}\s+(.+?)(?=\s+--|\s*$)"` — 경로형 옵션(`--base`·`--adapter`)의 값을
+  다음 ` --플래그`(또는 줄끝)까지 lazy 캡처. 숫자/식별자 옵션(`--hqq-nbits`·`--label` 등)은 단일 토큰 유지.
+  `_str_opt`에 `.strip()` 방어 추가.
+- legacy `monitor.sh`: `base_raw`/`adapter_raw`를 `sed -n 's/.*--base \(.*\)/\1/p' | sed 's/ --.*//'` 로 교체
+  (그대로 grep `[^ ]+`는 잘림). eval `--label` 우선 라벨은 유지.
+
+### C2
+- 로그의 `command` 줄만 읽는 순수 파서(읽기전용). systemd 불필요. 도는 123B 학습 무간섭.
+
+### 리드 자체검증
+- **테스트 172개 중 170 통과, +3 신규 전원 통과.** 실패 2건은 기존 `test_power_collector`(NTFS 콜론 파일명), 무관.
+- **라이브(도는 m123bsmoke)**: Python `.pyz`·bash 둘 다 `모델:  Mistral-Large 123B · HQQ 2bit · seq512 ·
+  LoRA r16+mlp · 1ep` — 바이트 일치. base_raw=`/run/media/user/새 볼륨/mistral-large-2411`, base_bn=`mistral-large-2411`.
+- **`.pyz` 재빌드**: `make pyz` → `halo-monitor 0.6.1`.
