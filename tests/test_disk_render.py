@@ -6,6 +6,7 @@ why the existing byte-parity golden tests keep passing untouched.
 """
 
 import time
+import unicodedata
 import unittest
 
 import _util  # noqa: F401
@@ -35,6 +36,18 @@ def frame(snap, cfg):
     return render_frame(snap, cfg, localtime=fixed_lt(12, 0, 0)).split("\n")
 
 
+def col_of(line, needle):
+    """Terminal *column* where ``needle`` starts — not its character index.
+
+    Alignment must be asserted in display columns: a Korean volume label such as
+    ``새 볼륨1`` is 5 characters but 8 columns wide, so ``str.index`` would report
+    two correctly-aligned rows as mismatched. Deliberately a second, independent
+    implementation of the width rule rather than the renderer's own helper.
+    """
+    prefix = line[:line.index(needle)]
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in prefix)
+
+
 _DATA = DiskStat(path="/mnt/data", label="/mnt/data", total_bytes=500 * GIB,
                  free_bytes=333 * GIB, used_bytes=167 * GIB, used_pct=33,
                  low=False, present=True)
@@ -42,6 +55,10 @@ _ROOT_LOW = DiskStat(path="/", label="/", total_bytes=100 * GIB,
                      free_bytes=3 * GIB, used_bytes=97 * GIB, used_pct=97,
                      low=True, present=True)
 _EXT_ABSENT = DiskStat(path="/run/media/user/새 볼륨", label="외장모델", present=False)
+#: The 1.9TB external that auto-discovery now surfaces: 4-digit used/total figures.
+_BIG_EXT = DiskStat(path="/run/media/user/새 볼륨1", label="새 볼륨1",
+                    total_bytes=1863 * GIB, free_bytes=441 * GIB,
+                    used_bytes=1422 * GIB, used_pct=76, low=False, present=True)
 
 
 class TestDiskBlockAdditive(unittest.TestCase):
@@ -89,6 +106,34 @@ class TestDiskLineFormat(unittest.TestCase):
         # colons line up in the same column.
         lines = frame(snap_with([_DATA, _ROOT_LOW]), CFG_KO)
         self.assertEqual(lines[12].index(":"), lines[13].index(":"))
+
+
+class TestDiskColumnAlignment(unittest.TestCase):
+    """Auto-discovery can mix magnitudes (a 1.9TB drive next to a 210GB root).
+
+    A fixed-width numeric column made the 4-digit row jut out and dragged the bar,
+    percentage and free-space columns out of line on every other row. Widths are
+    now computed per frame, so the bars start in the same column regardless.
+    """
+
+    def test_bars_align_across_mixed_magnitudes(self):
+        lines = frame(snap_with([_BIG_EXT, _DATA, _ROOT_LOW]), CFG_KO)[12:15]
+        starts = [col_of(ln, "[") for ln in lines]
+        self.assertEqual(len(set(starts)), 1, f"bar columns misaligned: {starts}")
+
+    def test_free_column_aligns_too(self):
+        lines = frame(snap_with([_BIG_EXT, _DATA, _ROOT_LOW]), CFG_KO)[12:15]
+        self.assertEqual(len({col_of(ln, "여유") for ln in lines}), 1)
+
+    def test_absent_row_does_not_break_width_computation(self):
+        # An absent mount has no numbers; it must not poison the max() widths.
+        lines = frame(snap_with([_BIG_EXT, _EXT_ABSENT, _DATA]), CFG_KO)[12:15]
+        self.assertTrue(lines[1].rstrip().endswith("사용불가"))
+        self.assertEqual(col_of(lines[0], "["), col_of(lines[2], "["))
+
+    def test_single_disk_has_no_stray_padding(self):
+        # One mount -> natural widths, i.e. the legacy spacing is unchanged.
+        self.assertIn("167.0 / 500GB", frame(snap_with([_DATA]), CFG_KO)[12])
 
 
 if __name__ == "__main__":

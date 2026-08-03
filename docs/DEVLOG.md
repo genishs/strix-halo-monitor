@@ -396,3 +396,54 @@ Phase 5(확장)의 두 번째 독립 기능. 디스크 기능과 **완전히 같
 - **라이브(도는 m123bsmoke)**: Python `.pyz`·bash 둘 다 `모델:  Mistral-Large 123B · HQQ 2bit · seq512 ·
   LoRA r16+mlp · 1ep` — 바이트 일치. base_raw=`/run/media/user/새 볼륨/mistral-large-2411`, base_bn=`mistral-large-2411`.
 - **`.pyz` 재빌드**: `make pyz` → `halo-monitor 0.6.1`.
+
+## v0.7.0 — 디스크 위젯이 마운트된 디스크를 다 못 보여주는 버그 수정 (하드코딩 → 자동탐지)
+
+브랜치: `feature/phase-5-disk` · 리드: 개선생 · 마이너 `v0.6.1 → v0.7.0`
+
+두목 직접 발견: 외장이 2개인데 디스크 위젯에 1개만 나온다.
+
+### 진단 (라이브 재확인)
+- **개수 제한 코드는 없다.** 원인은 `config.DEFAULT_DISK_MOUNTS`의 하드코딩 3개
+  (`/mnt/data`, `/run/media/user/새 볼륨`, `/`). 위젯은 이 목록만 `statvfs` 한다 →
+  **목록에 없는 마운트는 존재 자체가 보이지 않는다**(누락이 아니라 애초에 조회 대상이 아님).
+- 실제 마운트는 4개. `df -T` 실측: `/`(ext4 210G), `/mnt/data`(fuseblk 701G),
+  `/run/media/user/새 볼륨`(exfat 932G), **`/run/media/user/새 볼륨1`(ntfs3 1.9T) ← 하드코딩 목록에 없음**.
+- `/proc/mounts` 실측: 공백이 `\040`으로 이스케이프됨(`/run/media/user/새\040볼륨1`). 디코드 필수.
+
+### 한 일
+- **`collectors/mounts.py` 신규** — `/proc/mounts` 파싱·필터·라벨·정렬. 순수 텍스트→데이터,
+  유일한 I/O는 `read_mounts_text(root)`(주입 가능 → 픽스처 트리로 테스트).
+  제외: 의사FS(`tmpfs`/`squashfs`/`overlay`…), `/boot/efi`, `/proc|/sys|/dev|/snap|/run`
+  (단 `/run/media`는 유지), 네트워크FS(끊긴 마운트의 `statvfs`가 TUI를 멈추므로), bind 중복.
+  `fuseblk`(ntfs-3g)는 **진짜 디스크라 유지** — 점 있는 `fuse.*`만 의사FS로 제외.
+- **`config.py`** — `disk_mounts: tuple|None = None`(=자동탐지). `net_ifaces`와 **같은 규약**으로 맞춤.
+  `DEFAULT_DISK_MOUNTS` 제거. `HALO_DISK_MAX`(8)·`HALO_DISK_RESCAN_S`(5.0) 추가.
+- **`collectors/disk.py`** — 명시 목록이면 그대로, `None`이면 탐지(TTL 캐시). 캐시가 착탈 대응이자
+  틱마다 재탐지를 막는 유일한 상태(순수 성능 메모 — 버려도 동작 동일). 자동탐지만 상한 적용(용량 큰 순).
+- **`ui/widgets.py`** — 사용량/총량/여유 칸 폭을 프레임마다 계산. 고정폭 `:>5`가 1.9T의 `1422.1`에
+  넘쳐 그 줄부터 컬럼이 밀렸다(자동탐지로 TB급이 처음 보이면서 드러남). 라벨 정렬과 같은 방식.
+
+### C2
+- `statvfs` + `/proc/mounts`(커널 메모리상 텍스트)만. `df`·`lsblk` 서브프로세스 없음 —
+  비용만이 아니라 **공백 포함 경로를 셸에 태우는 것이 이 프로젝트의 반복 함정**이라서(v0.6.1 참조).
+  141B 채점 도는 중 작업, 무간섭.
+
+### 리드 자체검증
+- **테스트 213개 중 211 통과, +41 신규 전원 통과.** 실패 2건은 기존 `test_power_collector`
+  (RAPL 픽스처 콜론 파일명), 이번 변경과 무관 — 변경 전 `git stash` 상태에서도 동일 2건 실패 확인.
+- **기존 테스트 1건 교체**: `test_default_mounts_present`는 하드코딩 목록(=버그 그 자체)을 단언하던
+  테스트라 유지 불가. 같은 보장을 실제로 결정하는 계층에서 검증하도록
+  `test_default_is_auto_discovery` + `test_mounts_discovery.test_finds_fixed_mounts`로 대체.
+- **라이브 `~/gpumon`(.pyz 재빌드 후) — 4개 전부 표시, 컬럼 정렬됨**:
+  ```
+     ★/mnt/data:    517.3 /  701GB  [██████████████░░░░░░] 74%   여유 183.7GB ✓
+     ★새 볼륨  :    830.2 /  931GB  [█████████████████░░░] 89%   여유 101.3GB ✓
+     ★새 볼륨1 :   1422.1 / 1863GB  [███████████████░░░░░] 76%   여유 440.9GB ✓
+     ★/        :    133.7 /  210GB  [████████████░░░░░░░░] 64%   여유  65.3GB ✓
+  ```
+  수치는 `df -h`와 일치(184G/102G/441G/66G avail).
+- **착탈은 픽스처 테스트로만 검증** — 실물 탈착은 채점 중이라 시도하지 않았다(마운트에 root 필요).
+  `test_hotplug_new_drive_appears_after_ttl`·`test_hotunplug_removed_drive_disappears_after_ttl`가
+  가짜 시계로 TTL 만료 전/후를 각각 단언.
+- **`.pyz` 재빌드**: `make pyz` → `dist/halo-monitor.pyz`(gitignore 대상, 로컬 산출물).

@@ -36,14 +36,16 @@ class DiskTarget:
     label: str | None = None
 
 
-#: Mounts that matter for the training/scoring workflow: the adapter-output store,
-#: the external model drive (may be absent -> shown as unavailable), and root.
-#: Override via ``HALO_DISK_MOUNTS`` or by constructing ``Config`` directly.
-DEFAULT_DISK_MOUNTS: tuple[DiskTarget, ...] = (
-    DiskTarget("/mnt/data", "/mnt/data"),
-    DiskTarget("/run/media/user/새 볼륨", "외장모델"),
-    DiskTarget("/", "/"),
-)
+#: Cap on *auto-discovered* mounts, so a machine with many volumes cannot push the
+#: rest of the frame off-screen. When more are found, the largest by capacity win
+#: (see ``collectors/disk.py``). An explicit ``HALO_DISK_MOUNTS`` list is never
+#: capped — if the user named those mounts, they get all of them.
+DEFAULT_DISK_MAX_MOUNTS = 8
+
+#: How often auto-discovery re-reads ``/proc/mounts``, in seconds. This bounds
+#: hot-plug latency: a drive connected mid-run appears within this window instead of
+#: needing a restart, without re-scanning on every ~2s tick.
+DEFAULT_DISK_RESCAN_S = 5.0
 
 
 @dataclass(frozen=True)
@@ -80,9 +82,14 @@ class Config:
     sysfs_root: str = "/"                # injectable for tests (collectors, Phase 2)
     label_map: Mapping[str, str] = field(default_factory=lambda: dict(DEFAULT_LABEL_MAP))
     # --- disk widget (Phase 5) ---
-    disk_mounts: tuple[DiskTarget, ...] = DEFAULT_DISK_MOUNTS
+    #: Explicit mounts to show. ``None`` = auto-discover every real mounted
+    #: filesystem (``collectors/mounts.py``); an empty tuple = widget disabled; a
+    #: non-empty tuple = show exactly these. Mirrors ``net_ifaces`` below.
+    disk_mounts: tuple[DiskTarget, ...] | None = None
     disk_warn_free_gb: float = 10.0      # warn when free space < this many GiB ...
     disk_warn_free_pct: float = 5.0      # ... OR free fraction < this percent
+    disk_max_mounts: int = DEFAULT_DISK_MAX_MOUNTS   # cap on auto-discovered mounts
+    disk_rescan_s: float = DEFAULT_DISK_RESCAN_S     # auto-discovery cache TTL (s)
     # --- network throughput widget (Phase 5) ---
     #: Explicit interfaces to show. ``None`` = auto-detect via ``net_auto``; an empty
     #: tuple = widget disabled; a non-empty tuple = show exactly these.
@@ -121,7 +128,7 @@ def _parse_disk_mounts(spec: str | None) -> tuple[DiskTarget, ...] | None:
     then defaults to the path). ``;`` is the separator because mount paths may
     contain spaces (e.g. ``/run/media/user/새 볼륨``) but not semicolons. An empty
     value (``HALO_DISK_MOUNTS=``) disables the widget (returns an empty tuple).
-    ``None`` (unset) means "use the default mounts".
+    ``None`` (unset) means "auto-discover the mounted filesystems".
     """
     if spec is None:
         return None
@@ -178,6 +185,7 @@ def config_from_env(
     lang = "en" if env.get("HALO_LANG", "ko") == "en" else "ko"
     if lang_override in ("ko", "en"):
         lang = lang_override
+    # None (unset) stays None all the way through: that is the "auto-discover" signal.
     mounts = _parse_disk_mounts(env.get("HALO_DISK_MOUNTS"))
     net_ifaces = _parse_net_ifaces(env.get("HALO_NET_IFACES"))
     net_auto = NET_AUTO_ALL if env.get("HALO_NET_AUTO") == NET_AUTO_ALL else NET_AUTO_DEFAULT
@@ -188,9 +196,11 @@ def config_from_env(
         pool_gb=_int(env, "HALO_POOL_GB", 60),
         heldout_total=_int(env, "HALO_HELDOUT_TOTAL", 7),
         lang=lang,
-        disk_mounts=DEFAULT_DISK_MOUNTS if mounts is None else mounts,
+        disk_mounts=mounts,
         disk_warn_free_gb=_float(env, "HALO_DISK_WARN_GB", 10.0),
         disk_warn_free_pct=_float(env, "HALO_DISK_WARN_PCT", 5.0),
+        disk_max_mounts=_int(env, "HALO_DISK_MAX", DEFAULT_DISK_MAX_MOUNTS),
+        disk_rescan_s=_float(env, "HALO_DISK_RESCAN_S", DEFAULT_DISK_RESCAN_S),
         net_ifaces=net_ifaces,
         net_auto=net_auto,
     )

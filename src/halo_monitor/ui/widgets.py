@@ -146,10 +146,20 @@ def disk_lines(disks: list[DiskStat], lang: str, theme: Theme) -> list[str]:
     Absent mount (unmounted / removable drive not connected)::
 
         ★<label>:   사용불가
+
+    The label, used and total columns are each widened to the widest value in the
+    set, so the bars and percentages line up in one column. The numeric widths must
+    be dynamic because auto-discovery can put a 4-digit multi-TB drive (``1422.1 /
+    1863GB``) next to a 3-digit one (``133.7 / 210GB``); a fixed width made the
+    larger row jut out and dragged every column after it out of alignment.
     """
     if not disks:
         return []
+    present = [d for d in disks if d.present]
     label_w = max(_disp_width(d.label or d.path) for d in disks)
+    used_w = max((len(gb1(d.used_bytes)) for d in present), default=0)
+    total_w = max((len(gb0(d.total_bytes)) for d in present), default=0)
+    free_w = max((len(gb1(d.free_bytes)) for d in present), default=0)
     free_word = i18n.t(lang, "free")
     out: list[str] = []
     for d in disks:
@@ -159,9 +169,9 @@ def disk_lines(disks: list[DiskStat], lang: str, theme: Theme) -> list[str]:
             continue
         pct = d.used_pct if d.used_pct is not None else 0
         out.append(
-            f"{head}   {gb1(d.used_bytes):>5} / {gb0(d.total_bytes)}GB  "
+            f"{head}   {gb1(d.used_bytes):>{used_w}} / {gb0(d.total_bytes):>{total_w}}GB  "
             f"[{bar(pct, theme)}] {pct}%   "
-            f"{free_word} {gb1(d.free_bytes)}GB {disk_flag(d.low, lang, theme)}"
+            f"{free_word} {gb1(d.free_bytes):>{free_w}}GB {disk_flag(d.low, lang, theme)}"
         )
     return out
 

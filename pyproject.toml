@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "halo-monitor"
-version = "0.6.1"
+version = "0.7.0"
 description = "Real-time terminal dashboard for LLM training/scoring on AMD Strix Halo (gfx1151) unified-memory APUs"
 readme = "README.md"
 license = { file = "LICENSE" }

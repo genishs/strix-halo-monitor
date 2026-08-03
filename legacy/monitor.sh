@@ -35,9 +35,13 @@ POOL_GB="${HALO_POOL_GB:-60}"                           # 통합메모리 풀 �
 HELDOUT_TOTAL="${HALO_HELDOUT_TOTAL:-7}"                # 채점 heldout 태스크 총 개수
 # 디스크 위젯(Phase 5): 표시할 마운트 목록과 여유공간 경고 임계.
 #   HALO_DISK_MOUNTS = "라벨=경로;라벨=경로;..." (`;` 구분, 경로에 공백 허용). 빈 값이면 디스크섹션 끔.
+#   미설정이면 /proc/mounts 자동탐지(v0.7.0). 종전엔 하드코딩 3개만 봐서, 목록에 없는 드라이브는
+#   마운트돼 있어도 통째로 안 보였다(외장 2개 중 1개만 표시된 버그).
 #   여유가 <경고GB 또는 <경고% 이면 ⚠️ 마커. df(=statvfs)만 사용 — du/디렉토리 스캔 없음(학습 I/O 무간섭).
 DISK_WARN_GB="${HALO_DISK_WARN_GB:-10}"                 # 여유공간 경고 임계(GiB)
 DISK_WARN_PCT="${HALO_DISK_WARN_PCT:-5}"                # 여유공간 경고 임계(%)
+DISK_MAX="${HALO_DISK_MAX:-8}"                          # 자동탐지 표시 상한(초과 시 용량 큰 순)
+DISK_RESCAN="${HALO_DISK_RESCAN_S:-5}"                  # 자동탐지 재탐지 주기(초) — 드라이브 착탈 반영
 # ─────────────────────────────────────────────────────────────────────────
 
 # ── 언어 모드: 기본 한국어. HALO_LANG=en 환경변수 또는 --english/-e 인자로 영어 전환.
@@ -67,19 +71,75 @@ base_label_for(){
   esac
 }
 
-# 디스크 마운트 목록 파싱(1회). HALO_DISK_MOUNTS 미설정 시 기본 3개(데이터·외장모델·루트).
-disk_labels=(); disk_paths=()
-if [ -n "${HALO_DISK_MOUNTS+set}" ]; then DISK_SPEC="$HALO_DISK_MOUNTS"; else
-  DISK_SPEC="/mnt/data=/mnt/data;외장모델=/run/media/user/새 볼륨;/=/"; fi
+# 디스크 마운트 목록. HALO_DISK_MOUNTS를 주면 종전대로 그 목록만(1회 파싱).
+# 미설정이면 자동탐지 모드 — 아래 _disk_scan 이 주기적으로 /proc/mounts 를 다시 읽는다.
+disk_labels=(); disk_paths=(); disk_auto=0; disk_scan_at=0; disk_maxw=0
 _trim(){ printf '%s' "$1" | sed 's/^ *//; s/ *$//'; }
-IFS=';' read -ra _dents <<< "$DISK_SPEC"
-for _e in "${_dents[@]}"; do
-  [ -z "$(_trim "$_e")" ] && continue
-  if [[ "$_e" == *"="* ]]; then _lbl="$(_trim "${_e%%=*}")"; _pth="$(_trim "${_e#*=}")";
-  else _lbl="$(_trim "$_e")"; _pth="$_lbl"; fi
-  disk_labels+=("$_lbl"); disk_paths+=("$_pth")
-done
-disk_maxw=0; for _l in "${disk_labels[@]}"; do [ "${#_l}" -gt "$disk_maxw" ] && disk_maxw=${#_l}; done
+_disk_width(){ disk_maxw=0; local _l; for _l in "${disk_labels[@]}"; do
+  [ "${#_l}" -gt "$disk_maxw" ] && disk_maxw=${#_l}; done; }
+if [ -n "${HALO_DISK_MOUNTS+set}" ]; then
+  IFS=';' read -ra _dents <<< "$HALO_DISK_MOUNTS"
+  for _e in "${_dents[@]}"; do
+    [ -z "$(_trim "$_e")" ] && continue
+    if [[ "$_e" == *"="* ]]; then _lbl="$(_trim "${_e%%=*}")"; _pth="$(_trim "${_e#*=}")";
+    else _lbl="$(_trim "$_e")"; _pth="$_lbl"; fi
+    disk_labels+=("$_lbl"); disk_paths+=("$_pth")
+  done
+  _disk_width
+else
+  disk_auto=1
+fi
+
+# 실제 마운트된 파일시스템을 훑어 disk_paths/disk_labels 를 다시 채운다(자동탐지 모드 전용).
+# /proc/mounts 만 읽는다 — lsblk·df 서브프로세스 없음. 경로의 공백은 커널이 `\040` 으로
+# 이스케이프하므로 정렬까지 끝낸 뒤 printf '%b' 로 디코드한다(탭 구분이라 공백에 안전).
+# 제외: 의사 파일시스템, /boot·/snap·/proc·/sys·/dev·/run(단 /run/media 는 유지),
+#       네트워크 FS(끊긴 마운트의 df 가 화면 전체를 멈추므로), 같은 블록장치의 bind 중복.
+_disk_scan(){
+  disk_labels=(); disk_paths=()
+  local _p _lbl
+  while IFS= read -r _p; do
+    [ -z "$_p" ] && continue
+    _p="$(printf '%b' "$_p")"                      # \040 → 공백
+    case "$_p" in
+      /run/media/*|/media/*) _lbl="${_p##*/}" ;;   # 이동식: 볼륨 폴더명
+      *)                     _lbl="$_p" ;;         # 고정: 경로 그대로
+    esac
+    disk_labels+=("$_lbl"); disk_paths+=("$_p")
+  done < <(awk '
+    {
+      dev=$1; path=$2; fs=$3
+      if (fs ~ /^(tmpfs|devtmpfs|squashfs|overlay|proc|sysfs|cgroup|cgroup2|devpts|mqueue|hugetlbfs|debugfs|tracefs|securityfs|pstore|efivarfs|bpf|configfs|fusectl|autofs|binfmt_misc|nsfs|ramfs|rpc_pipefs|selinuxfs)$/) next
+      if (fs == "fuse" || fs ~ /^fuse\./) next      # fuseblk(ntfs-3g)는 진짜 디스크라 유지
+      if (fs ~ /^(nfs|nfs4|cifs|smb3|smbfs|sshfs|9p|afs|ceph|glusterfs|lustre|beegfs)$/) next
+      rem = (path ~ /^\/run\/media\// || path ~ /^\/media\//)
+      if (!rem) {
+        if (path ~ /^\/(proc|sys|dev|boot|snap|run)($|\/)/) next
+        if (path ~ /^\/var\/(snap|lib\/docker|lib\/snapd)($|\/)/) next
+      }
+      if (dev ~ /^\/dev\//) { if (dev in seen) next; seen[dev]=1 }
+      printf "%d\t%d\t%s\n", (path=="/"), rem, path   # 정렬키: 고정 → 이동식 → / 마지막
+    }' /proc/mounts | sort -t"$(printf '\t')" -k1,1n -k2,2n -k3,3 | cut -f3-)
+  _disk_cap
+  _disk_width
+}
+
+# 표시 상한: 초과하면 용량 큰 순으로 DISK_MAX 개만 남긴다(화면 붕괴 방지).
+# 재탐지 때만 도는 경로라 df 호출은 DISK_RESCAN 주기에 한 번뿐.
+_disk_cap(){
+  [ "${#disk_paths[@]}" -le "$DISK_MAX" ] && return
+  local _i _sz _keep _p _lbl
+  _keep=$(for _i in "${!disk_paths[@]}"; do
+      _sz=$(df -B1 --output=size "${disk_paths[$_i]}" 2>/dev/null | tail -1 | tr -dc '0-9')
+      printf '%s\t%s\n' "${_sz:-0}" "$_i"
+    done | sort -rn -k1,1 | head -n "$DISK_MAX" | cut -f2)
+  local _lbls=() _pths=()
+  while IFS= read -r _i; do
+    [ -z "$_i" ] && continue
+    _lbls+=("${disk_labels[$_i]}"); _pths+=("${disk_paths[$_i]}")
+  done <<< "$_keep"
+  disk_labels=("${_lbls[@]}"); disk_paths=("${_pths[@]}")
+}
 
 # 네트워크 위젯(Phase 5): 표시할 인터페이스와 자동감지 모드.
 #   HALO_NET_IFACES = "라벨=이름;이름;..." (`;` 구분). 미설정=자동감지, 빈 값이면 네트워크섹션 끔.
@@ -271,6 +331,11 @@ while true; do
   printf "   ★%s:  CPU %3sW  │  GPU %3sW  │  %s %3sW    %s\n" "$(t "전력" "Power")" "$cpuW" "$gpuW" "$(t "전체" "Total")" "$totW" "$(t "(GPU=전체−CPU 근사, RAPL)" "(GPU=Total−CPU approx, RAPL)")"
   printf "   sclk: %sMhz      %s: %s\n" "${sclk:-?}" "$(t "유닛" "unit")" "$active"
   # 디스크: 마운트별 사용율/여유공간/부족경고 (df=statvfs만; du·재귀스캔 없음 → 학습 I/O 무간섭)
+  # 자동탐지 모드면 DISK_RESCAN 초마다 마운트 목록을 다시 훑는다 → 실행 중 드라이브 착탈 반영.
+  if [ "$disk_auto" = "1" ]; then
+    _now=$(date +%s)
+    if [ $((_now - disk_scan_at)) -ge "$DISK_RESCAN" ]; then _disk_scan; disk_scan_at=$_now; fi
+  fi
   if [ "${#disk_paths[@]}" -gt 0 ]; then
     echo "  ────────────────────────────────── $(t "디스크" "Disk") ──────────────────────────────────"
     _i=0
