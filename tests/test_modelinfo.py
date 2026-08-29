@@ -38,6 +38,34 @@ class TestModelInfo(unittest.TestCase):
         self.assertIsNone(mi.seq)
         self.assertFalse(mi.lora_mlp)
 
+    def test_base_path_with_spaces(self):
+        # Regression: --base value on the box is "/run/media/user/새 볼륨/<model>". A
+        # naive \S+ capture truncated at the space -> basename "새". The value must be
+        # taken whole (up to the next --flag), so the real model name survives.
+        cmd = ("command : python train_directml.py "
+               "--base /run/media/user/새 볼륨/mistral-large-2411 "
+               "--quant hqq --hqq-nbits 2 --seq 512")
+        mi = parse_command(cmd, self.cfg)
+        self.assertEqual(mi.base_raw, "/run/media/user/새 볼륨/mistral-large-2411")
+        self.assertEqual(mi.base_bn, "mistral-large-2411")
+        self.assertEqual(mi.base_label, "Mistral-Large 123B")  # mapped, not "새"
+        self.assertEqual(mi.nbits, 2)
+        self.assertEqual(mi.seq, 512)
+
+    def test_base_path_with_spaces_at_end_of_line(self):
+        # --base is the final argument (no trailing --flag): capture to end of line.
+        mi = parse_command("command --base /run/media/user/새 볼륨/mixtral-8x22b-v0.1", self.cfg)
+        self.assertEqual(mi.base_raw, "/run/media/user/새 볼륨/mixtral-8x22b-v0.1")
+        self.assertEqual(mi.base_bn, "mixtral-8x22b-v0.1")
+
+    def test_adapter_path_with_spaces(self):
+        cmd = ("command eval_hard_tsc.py --adapter /run/media/user/새 볼륨/coder-lora "
+               "--heldout --label run7")
+        mi = parse_command(cmd, self.cfg)
+        self.assertEqual(mi.adapter, "coder-lora")   # basename of the spaced path
+        self.assertEqual(mi.eval_label, "run7")
+        self.assertTrue(mi.heldout)
+
     def test_unmapped_base_falls_back_to_basename(self):
         mi = parse_command("command --base /x/some-new-model-7b", self.cfg)
         self.assertEqual(mi.base_label, "some-new-model-7b")

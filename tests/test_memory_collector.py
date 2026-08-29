@@ -35,6 +35,7 @@ class TestMemoryCollector(unittest.TestCase):
         self.assertAlmostEqual(
             mem.swap_used_gb, (67380216 - 64670052) / 1024 / 1024, places=6
         )
+        self.assertEqual(mem.gpu_busy_pct, 62)  # amdgpu utilization %, carried through
         self.assertIsNone(mem.gtt_rate_mb_s)  # loop-owned, never set here
 
     def test_no_backend_still_reads_host_ram(self):

@@ -33,6 +33,15 @@ UNIT_GLOB="${HALO_UNIT_GLOB:-gpujob-*}"                 # systemd --user 유닛 
 TITLE="${HALO_TITLE:-Strix Halo Train/Score Monitor}"   # 대시보드 제목
 POOL_GB="${HALO_POOL_GB:-60}"                           # 통합메모리 풀 안내치(GB, 경고 문구용 — 실제 총량은 sysfs에서 읽음)
 HELDOUT_TOTAL="${HALO_HELDOUT_TOTAL:-7}"                # 채점 heldout 태스크 총 개수
+# 디스크 위젯(Phase 5): 표시할 마운트 목록과 여유공간 경고 임계.
+#   HALO_DISK_MOUNTS = "라벨=경로;라벨=경로;..." (`;` 구분, 경로에 공백 허용). 빈 값이면 디스크섹션 끔.
+#   미설정이면 /proc/mounts 자동탐지(v0.7.0). 종전엔 하드코딩 3개만 봐서, 목록에 없는 드라이브는
+#   마운트돼 있어도 통째로 안 보였다(외장 2개 중 1개만 표시된 버그).
+#   여유가 <경고GB 또는 <경고% 이면 ⚠️ 마커. df(=statvfs)만 사용 — du/디렉토리 스캔 없음(학습 I/O 무간섭).
+DISK_WARN_GB="${HALO_DISK_WARN_GB:-10}"                 # 여유공간 경고 임계(GiB)
+DISK_WARN_PCT="${HALO_DISK_WARN_PCT:-5}"                # 여유공간 경고 임계(%)
+DISK_MAX="${HALO_DISK_MAX:-8}"                          # 자동탐지 표시 상한(초과 시 용량 큰 순)
+DISK_RESCAN="${HALO_DISK_RESCAN_S:-5}"                  # 자동탐지 재탐지 주기(초) — 드라이브 착탈 반영
 # ─────────────────────────────────────────────────────────────────────────
 
 # ── 언어 모드: 기본 한국어. HALO_LANG=en 환경변수 또는 --english/-e 인자로 영어 전환.
@@ -62,9 +71,101 @@ base_label_for(){
   esac
 }
 
+# 디스크 마운트 목록. HALO_DISK_MOUNTS를 주면 종전대로 그 목록만(1회 파싱).
+# 미설정이면 자동탐지 모드 — 아래 _disk_scan 이 주기적으로 /proc/mounts 를 다시 읽는다.
+disk_labels=(); disk_paths=(); disk_auto=0; disk_scan_at=0; disk_maxw=0
+_trim(){ printf '%s' "$1" | sed 's/^ *//; s/ *$//'; }
+_disk_width(){ disk_maxw=0; local _l; for _l in "${disk_labels[@]}"; do
+  [ "${#_l}" -gt "$disk_maxw" ] && disk_maxw=${#_l}; done; }
+if [ -n "${HALO_DISK_MOUNTS+set}" ]; then
+  IFS=';' read -ra _dents <<< "$HALO_DISK_MOUNTS"
+  for _e in "${_dents[@]}"; do
+    [ -z "$(_trim "$_e")" ] && continue
+    if [[ "$_e" == *"="* ]]; then _lbl="$(_trim "${_e%%=*}")"; _pth="$(_trim "${_e#*=}")";
+    else _lbl="$(_trim "$_e")"; _pth="$_lbl"; fi
+    disk_labels+=("$_lbl"); disk_paths+=("$_pth")
+  done
+  _disk_width
+else
+  disk_auto=1
+fi
+
+# 실제 마운트된 파일시스템을 훑어 disk_paths/disk_labels 를 다시 채운다(자동탐지 모드 전용).
+# /proc/mounts 만 읽는다 — lsblk·df 서브프로세스 없음. 경로의 공백은 커널이 `\040` 으로
+# 이스케이프하므로 정렬까지 끝낸 뒤 printf '%b' 로 디코드한다(탭 구분이라 공백에 안전).
+# 제외: 의사 파일시스템, /boot·/snap·/proc·/sys·/dev·/run(단 /run/media 는 유지),
+#       네트워크 FS(끊긴 마운트의 df 가 화면 전체를 멈추므로), 같은 블록장치의 bind 중복.
+_disk_scan(){
+  disk_labels=(); disk_paths=()
+  local _p _lbl
+  while IFS= read -r _p; do
+    [ -z "$_p" ] && continue
+    _p="$(printf '%b' "$_p")"                      # \040 → 공백
+    case "$_p" in
+      /run/media/*|/media/*) _lbl="${_p##*/}" ;;   # 이동식: 볼륨 폴더명
+      *)                     _lbl="$_p" ;;         # 고정: 경로 그대로
+    esac
+    disk_labels+=("$_lbl"); disk_paths+=("$_p")
+  done < <(awk '
+    {
+      dev=$1; path=$2; fs=$3
+      if (fs ~ /^(tmpfs|devtmpfs|squashfs|overlay|proc|sysfs|cgroup|cgroup2|devpts|mqueue|hugetlbfs|debugfs|tracefs|securityfs|pstore|efivarfs|bpf|configfs|fusectl|autofs|binfmt_misc|nsfs|ramfs|rpc_pipefs|selinuxfs)$/) next
+      if (fs == "fuse" || fs ~ /^fuse\./) next      # fuseblk(ntfs-3g)는 진짜 디스크라 유지
+      if (fs ~ /^(nfs|nfs4|cifs|smb3|smbfs|sshfs|9p|afs|ceph|glusterfs|lustre|beegfs)$/) next
+      rem = (path ~ /^\/run\/media\// || path ~ /^\/media\//)
+      if (!rem) {
+        if (path ~ /^\/(proc|sys|dev|boot|snap|run)($|\/)/) next
+        if (path ~ /^\/var\/(snap|lib\/docker|lib\/snapd)($|\/)/) next
+      }
+      if (dev ~ /^\/dev\//) { if (dev in seen) next; seen[dev]=1 }
+      printf "%d\t%d\t%s\n", (path=="/"), rem, path   # 정렬키: 고정 → 이동식 → / 마지막
+    }' /proc/mounts | sort -t"$(printf '\t')" -k1,1n -k2,2n -k3,3 | cut -f3-)
+  _disk_cap
+  _disk_width
+}
+
+# 표시 상한: 초과하면 용량 큰 순으로 DISK_MAX 개만 남긴다(화면 붕괴 방지).
+# 재탐지 때만 도는 경로라 df 호출은 DISK_RESCAN 주기에 한 번뿐.
+_disk_cap(){
+  [ "${#disk_paths[@]}" -le "$DISK_MAX" ] && return
+  local _i _sz _keep _p _lbl
+  _keep=$(for _i in "${!disk_paths[@]}"; do
+      _sz=$(df -B1 --output=size "${disk_paths[$_i]}" 2>/dev/null | tail -1 | tr -dc '0-9')
+      printf '%s\t%s\n' "${_sz:-0}" "$_i"
+    done | sort -rn -k1,1 | head -n "$DISK_MAX" | cut -f2)
+  local _lbls=() _pths=()
+  while IFS= read -r _i; do
+    [ -z "$_i" ] && continue
+    _lbls+=("${disk_labels[$_i]}"); _pths+=("${disk_paths[$_i]}")
+  done <<< "$_keep"
+  disk_labels=("${_lbls[@]}"); disk_paths=("${_pths[@]}")
+}
+
+# 네트워크 위젯(Phase 5): 표시할 인터페이스와 자동감지 모드.
+#   HALO_NET_IFACES = "라벨=이름;이름;..." (`;` 구분). 미설정=자동감지, 빈 값이면 네트워크섹션 끔.
+#   HALO_NET_AUTO = default(기본경로 인터페이스, 없으면 모든 비-loopback) | all(모든 비-loopback).
+#   /sys/class/net/*/statistics/{rx,tx}_bytes 커널 카운터만 읽음 — tcpdump·패킷캡처 없음(다운로드/학습 I/O 무간섭).
+NET_AUTO="${HALO_NET_AUTO:-default}"; [ "$NET_AUTO" = "all" ] || NET_AUTO="default"
+net_names=(); net_labels=(); net_explicit=0
+if [ -n "${HALO_NET_IFACES+set}" ]; then
+  net_explicit=1
+  IFS=';' read -ra _nents <<< "$HALO_NET_IFACES"
+  for _e in "${_nents[@]}"; do
+    [ -z "$(_trim "$_e")" ] && continue
+    if [[ "$_e" == *"="* ]]; then _lbl="$(_trim "${_e%%=*}")"; _nm="$(_trim "${_e#*=}")";
+    else _nm="$(_trim "$_e")"; _lbl="$_nm"; fi
+    net_names+=("$_nm"); net_labels+=("$_lbl")
+  done
+fi
+# 인터페이스별 직전 카운터(속도용)와 최초 카운터(세션 누적용). 이름으로 키.
+declare -A net_prev_rx net_prev_tx net_base_rx net_base_tx
+
 gttmax=$(cat /sys/class/drm/card*/device/mem_info_gtt_total 2>/dev/null | head -1)
 gttmaxg=$(awk "BEGIN{printf \"%.0f\", $gttmax/1073741824}")
 prev_gtt=0; prev_t=$(date +%s)
+# eval/채점 생성단계 관측용(로그에 per-line 타임스탬프 없음 → 반복 간 관측). gen 시작시각과
+# "0태스크에서 관측 시작했는가"(안 그러면 못 본 구간 tok/s를 과대추정하므로 tok/s 숨김).
+eval_gen_start=""; eval_from_zero=0
 # RAPL 전력 도메인 (sudo chmod a+r 후 읽기 가능). package-0=패키지전체(=PPT), 0:0=CPU코어
 PKG=/sys/class/powercap/intel-rapl:0/energy_uj
 CORE=/sys/class/powercap/intel-rapl:0:0/energy_uj
@@ -74,6 +175,8 @@ hms(){ local s=$1; printf "%dh%02dm%02ds" $((s/3600)) $(((s%3600)/60)) $((s%60))
 while true; do
   gtt=$(cat /sys/class/drm/card*/device/mem_info_gtt_used 2>/dev/null | head -1)
   vram=$(cat /sys/class/drm/card*/device/mem_info_vram_used 2>/dev/null | head -1)
+  # GPU 사용율(amdgpu gpu_busy_percent 커널 카운터, 읽기전용·순간값·간섭0). GTT 읽는 그 카드에서 같이 읽음.
+  gpubusy=$(cat /sys/class/drm/card*/device/gpu_busy_percent 2>/dev/null | head -1)
   gttg=$(awk "BEGIN{printf \"%.1f\", $gtt/1073741824}")
   vramg=$(awk "BEGIN{printf \"%.1f\", $vram/1073741824}")
   pct=$(awk "BEGIN{printf \"%.0f\", $gtt/$gttmax*100}")
@@ -86,20 +189,27 @@ while true; do
   if [ -n "$rununit" ]; then unit="${rununit%.service}"; else unit=$(basename "$(ls -t "$LOG_DIR"/$UNIT_GLOB.log 2>/dev/null | head -1)" .log 2>/dev/null); fi
   LOG=$(ls -t "$LOG_DIR"/${unit}*.log 2>/dev/null | head -1)
   active=$(systemctl --user is-active "$unit.service" 2>/dev/null)
-  case "$unit" in *score*) is_score=1;; *) is_score=0;; esac
+  # eval/채점 유닛 판별: score/grade/eval 이름 모두 채점(eval_hard_tsc)로 라우팅.
+  # (과거엔 *score*만 봐서 gpujob-grade141b-* 가 학습잡으로 오인돼 채점 진행이 안 보였음.)
+  case "$unit" in *score*|*grade*|*eval*) is_score=1;; *) is_score=0;; esac
+  [ "$is_score" = "1" ] || eval_gen_start=""   # 비채점 잡이면 생성 타이머 초기화(다음 채점 재관측)
   # 현재 학습/채점 중인 모델 정보 (로그의 command : 라인을 파싱; 실패해도 우아하게 빈값)
   cmdline=$(grep -m1 '^command' "$LOG" 2>/dev/null)
-  base_raw=$(echo "$cmdline" | grep -oE -e '--base +[^ ]+' | awk '{print $2}')
+  # --base 값은 공백 포함 경로일 수 있음(/run/media/user/새 볼륨/<model>). 순진한 [^ ]+ 는
+  # 공백에서 잘려 basename이 "새"가 됐음 → --base 뒤부터 다음 " --플래그"(또는 줄끝)까지 통째로.
+  base_raw=$(echo "$cmdline" | sed -n 's/.*--base \(.*\)/\1/p' | sed 's/ --.*//')
   base_bn=""; [ -n "$base_raw" ] && base_bn=$(basename "$base_raw")
   base_label=$(base_label_for "$base_bn")
-  smodel="${base_label:-${unit:-?}}"
+  eval_label=$(echo "$cmdline" | grep -oE -e '--label +[^ ]+' | awk '{print $2}')
+  # 채점 표시 라벨: --label(eval 실행명) 우선 → base_label → 유닛명.
+  smodel="${eval_label:-${base_label:-${unit:-?}}}"
   nbits=$(echo "$cmdline" | grep -oE -e '--hqq-nbits +[0-9]+' | awk '{print $2}')
   seqv=$(echo "$cmdline" | grep -oE -e '--seq +[0-9]+' | awk '{print $2}')
   maxnew=$(echo "$cmdline" | grep -oE -e '--max-new +[0-9]+' | awk '{print $2}')
   lorar=$(echo "$cmdline" | grep -oE -e '--lora-r +[0-9]+' | awk '{print $2}')
   lomlp=$(echo "$cmdline" | grep -oE -e '--lora-mlp')
   epochsv=$(echo "$cmdline" | grep -oE -e '--epochs +[0-9]+' | awk '{print $2}')
-  adapter_raw=$(echo "$cmdline" | grep -oE -e '--adapter +[^ ]+' | awk '{print $2}')
+  adapter_raw=$(echo "$cmdline" | sed -n 's/.*--adapter \(.*\)/\1/p' | sed 's/ --.*//')
   adapter_bn=""; [ -n "$adapter_raw" ] && adapter_bn=$(basename "$adapter_raw")
   heldoutv=$(echo "$cmdline" | grep -oE -e '--heldout')
   model_line=""
@@ -133,15 +243,28 @@ while true; do
     # 채점: 양자화(재사용 quant) → heldout N개 생성 → (재채점 파이프라인은 이 유닛 밖에서 진행될 수 있음)
     replaced=$(grep -c 'HQQ 스트리밍 치환 완료' "$LOG" 2>/dev/null); replaced=${replaced:-0}
     gen_done=$(grep -c 'generated \[' "$LOG" 2>/dev/null); gen_done=${gen_done:-0}
-    last_gen=$(grep -oE 'generated \[.*' "$LOG" 2>/dev/null | tail -1)
+    # 현재/최근 태스크명(신 eval_hard_tsc 포맷 "generated [name   ] N chars ..."에서 이름만)
+    cur_task=$(grep -oE 'generated \[[^]]+' "$LOG" 2>/dev/null | tail -1 | sed 's/generated \[//; s/ *$//')
     if [ "$active" != "active" ]; then
+      eval_gen_start=""
       res=$(systemctl --user show "$unit.service" -p Result --value 2>/dev/null)
-      phase="$(t "⏸ 채점 종료 ($active/$res)" "⏸ Scoring finished ($active/$res)")"
+      score_line=$(grep -oE 'SCORE [0-9.]+/[0-9]+ = [0-9.]+%' "$LOG" 2>/dev/null | tail -1)
+      if [ -n "$score_line" ]; then
+        phase="$(t "⏸ 채점 종료 ($active/$res) — $score_line" "⏸ Eval finished ($active/$res) — $score_line")"
+      else
+        phase="$(t "⏸ 채점 종료 ($active/$res)" "⏸ Eval finished ($active/$res)")"
+      fi
     elif [ "$replaced" -eq 0 ] && [ "$gen_done" -eq 0 ] && [ -n "$quant" ]; then
-      phase="$(t "🔧 채점준비: 양자화 $quant" "🔧 Scoring prep: quantizing $quant")"
-      eta="$(t "채점 전 준비단계" "pre-scoring prep")"
+      eval_gen_start=""
+      phase="$(t "🔧 채점준비: 양자화 $quant" "🔧 Eval prep: quantizing $quant")"
+      eta="$(t "채점 전 준비단계" "pre-eval prep")"
     else
-      phase="$(t "🧮 채점 ${smodel} — 생성 ${gen_done}/${HELDOUT_TOTAL}, 최근: ${last_gen:-대기중}" "🧮 Scoring ${smodel} — generated ${gen_done}/${HELDOUT_TOTAL}, last: ${last_gen:-waiting}")"
+      # 관측 tok/s: 생성단계 첫 관측 시각 기록(0태스크에서 시작했을 때만 신뢰).
+      if [ -z "$eval_gen_start" ]; then eval_gen_start=$(date +%s); [ "$gen_done" -eq 0 ] && eval_from_zero=1 || eval_from_zero=0; fi
+      gen_toks=$(grep -oE 'new=[0-9]+' "$LOG" 2>/dev/null | grep -oE '[0-9]+' | awk '{s+=$1}END{print s+0}')
+      gel=$(( $(date +%s) - eval_gen_start ))
+      toks_s="—"; { [ "$eval_from_zero" = "1" ] && [ "$gel" -gt 1 ] && [ "${gen_toks:-0}" -gt 0 ]; } && toks_s=$(awk "BEGIN{printf \"%.1f\", $gen_toks/$gel}")
+      phase="$(t "🧮 채점 ${smodel} — task ${gen_done}/${HELDOUT_TOTAL} (${toks_s} tok/s), 현재: ${cur_task:-대기중}" "🧮 Eval ${smodel} — task ${gen_done}/${HELDOUT_TOTAL} (${toks_s} tok/s), current: ${cur_task:-waiting}")"
       if [ "$gen_done" -ge 1 ] && [ -n "$start" ] && [ "$start" -gt 0 ] 2>/dev/null; then
         el=$(( $(date +%s) - start ))
         rem=$(( el * (HELDOUT_TOTAL - gen_done) / gen_done ))   # 남은태스크 × (경과/완료태스크) — 선형 외삽, 대략값
@@ -199,12 +322,79 @@ while true; do
   printf "  %s:  %-14s   %s: %s (%s %s)     %s: %s\n" "$(t "경과" "Elapsed")" "$elapsed" "$(t "완료예상" "ETA")" "$donetime" "$(t "남은" "remaining")" "$eta" "$(t "오류" "errors")" "$err"
   printf "  %s:  %s\n" "$(t "모델" "Model")" "${model_line:-?}"
   echo   "  ──────────────────────────────── $(t "통합메모리" "Unified Memory") ────────────────────────────────"
-  printf "  ★%s:  %5s / %sGB  [%s] %s%%   %s %s MB/s\n" "$(t "GTT(모델)" "GTT(model)")" "$gttg" "$gttmaxg" "$bar" "$pct" "$(t "증가" "rate")" "$rate"
+  # GPU 사용율은 값이 있을 때만 GTT 줄 끝에 덧붙임(가산적; 파일 없으면 기존 줄 그대로).
+  gpubusy_seg=""; [ -n "$gpubusy" ] && gpubusy_seg="   $(t "GPU 사용" "GPU busy") ${gpubusy}%"
+  printf "  ★%s:  %5s / %sGB  [%s] %s%%   %s %s MB/s%s\n" "$(t "GTT(모델)" "GTT(model)")" "$gttg" "$gttmaxg" "$bar" "$pct" "$(t "증가" "rate")" "$rate" "$gpubusy_seg"
   printf "   %s:   %5sGB %s     %s\n" "$(t "전용VRAM" "VRAM(ded.)")" "$vramg" "$(t "(nvtop이 보는 값)" "(what nvtop sees)")" "$(t "통합풀 ~${POOL_GB}GB (GTT+host 이 안이어야 안전)" "unified pool ~${POOL_GB}GB (GTT+host must fit)")"
   printf "   %s: %sGB %s     swap: %sGB\n" "$(t "host RAM여유" "host RAM free")" "$ram" "$ramflag" "$swap"
   echo   "  ─────────────────────────────── $(t "전력 · GPU" "Power · GPU") ─────────────────────────────────"
   printf "   ★%s:  CPU %3sW  │  GPU %3sW  │  %s %3sW    %s\n" "$(t "전력" "Power")" "$cpuW" "$gpuW" "$(t "전체" "Total")" "$totW" "$(t "(GPU=전체−CPU 근사, RAPL)" "(GPU=Total−CPU approx, RAPL)")"
   printf "   sclk: %sMhz      %s: %s\n" "${sclk:-?}" "$(t "유닛" "unit")" "$active"
+  # 디스크: 마운트별 사용율/여유공간/부족경고 (df=statvfs만; du·재귀스캔 없음 → 학습 I/O 무간섭)
+  # 자동탐지 모드면 DISK_RESCAN 초마다 마운트 목록을 다시 훑는다 → 실행 중 드라이브 착탈 반영.
+  if [ "$disk_auto" = "1" ]; then
+    _now=$(date +%s)
+    if [ $((_now - disk_scan_at)) -ge "$DISK_RESCAN" ]; then _disk_scan; disk_scan_at=$_now; fi
+  fi
+  if [ "${#disk_paths[@]}" -gt 0 ]; then
+    echo "  ────────────────────────────────── $(t "디스크" "Disk") ──────────────────────────────────"
+    _i=0
+    while [ "$_i" -lt "${#disk_paths[@]}" ]; do
+      _lbl="${disk_labels[$_i]}"; _pth="${disk_paths[$_i]}"
+      _lblpad=$(printf "%-${disk_maxw}s" "$_lbl")
+      _df=$(df -B1 --output=size,used,avail "$_pth" 2>/dev/null | tail -1)
+      if [ -z "$_df" ] || ! printf '%s' "$_df" | grep -qE '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+[[:space:]]+[0-9]+[[:space:]]*$'; then
+        printf "   ★%s:   %s\n" "$_lblpad" "$(t "사용불가" "unavailable")"
+      else
+        set -- $_df; _sz=$1; _us=$2; _av=$3
+        _pct=$(awk "BEGIN{printf \"%.0f\", $_us/$_sz*100}")
+        _usg=$(awk "BEGIN{printf \"%.1f\", $_us/1073741824}")
+        _szg=$(awk "BEGIN{printf \"%.0f\", $_sz/1073741824}")
+        _avg=$(awk "BEGIN{printf \"%.1f\", $_av/1073741824}")
+        _fl=$((_pct/5)); [ "$_fl" -gt 20 ] && _fl=20; [ "$_fl" -lt 0 ] && _fl=0
+        _bar=$(printf '█%.0s' $(seq 1 $_fl 2>/dev/null))$(printf '░%.0s' $(seq 1 $((20-_fl)) 2>/dev/null))
+        _low=$(awk "BEGIN{ag=$_av/1073741824; ap=$_av/$_sz*100; print (ag<$DISK_WARN_GB||ap<$DISK_WARN_PCT)?1:0}")
+        if [ "$_low" = "1" ]; then _flag="⚠️$(t "위험" "LOW")"; else _flag="✓"; fi
+        printf "   ★%s:   %5s / %sGB  [%s] %s%%   %s %sGB %s\n" "$_lblpad" "$_usg" "$_szg" "$_bar" "$_pct" "$(t "여유" "free")" "$_avg" "$_flag"
+      fi
+      _i=$((_i+1))
+    done
+  fi
+  # 네트워크: 인터페이스별 다운로드(RX)/업로드(TX) 속도 (커널 카운터 델타만; 패킷캡처·tcpdump 없음 → 다운로드/학습 무간섭)
+  cur_net_names=(); cur_net_labels=()
+  if [ "$net_explicit" = "1" ]; then
+    cur_net_names=("${net_names[@]}"); cur_net_labels=("${net_labels[@]}")
+  else
+    if [ "$NET_AUTO" = "all" ]; then _nl=""; else
+      _nl=$(awk 'NR>1 && $2=="00000000" && $1!="lo"{print $1}' /proc/net/route 2>/dev/null | awk '!s[$0]++'); fi
+    [ -z "$_nl" ] && _nl=$(for _d in /sys/class/net/*; do _n=$(basename "$_d"); [ "$_n" = lo ] && continue; echo "$_n"; done)
+    while IFS= read -r _n; do [ -z "$_n" ] && continue; cur_net_names+=("$_n"); cur_net_labels+=("$_n"); done <<< "$_nl"
+  fi
+  if [ "${#cur_net_names[@]}" -gt 0 ]; then
+    net_maxw=0; for _l in "${cur_net_labels[@]}"; do [ "${#_l}" -gt "$net_maxw" ] && net_maxw=${#_l}; done
+    echo "  ───────────────────────────────── $(t "네트워크" "Network") ─────────────────────────────────"
+    _i=0
+    while [ "$_i" -lt "${#cur_net_names[@]}" ]; do
+      _nm="${cur_net_names[$_i]}"; _lbl="${cur_net_labels[$_i]}"; _lblpad=$(printf "%-${net_maxw}s" "$_lbl")
+      _rx=$(cat "/sys/class/net/$_nm/statistics/rx_bytes" 2>/dev/null)
+      _tx=$(cat "/sys/class/net/$_nm/statistics/tx_bytes" 2>/dev/null)
+      if [ -z "$_rx" ] || [ -z "$_tx" ]; then
+        printf "   ★%s:   %s\n" "$_lblpad" "$(t "사용불가" "unavailable")"
+      else
+        [ -z "${net_base_rx[$_nm]:-}" ] && net_base_rx[$_nm]=$_rx && net_base_tx[$_nm]=$_tx
+        _prx="${net_prev_rx[$_nm]:-}"; _ptx="${net_prev_tx[$_nm]:-}"
+        if [ -n "$_prx" ]; then
+          _rxr=$(awk "BEGIN{d=$_rx-$_prx; if(d<0)printf\"?\";else printf\"%.1f\",d/1048576/$dt}")
+          _txr=$(awk "BEGIN{d=$_tx-$_ptx; if(d<0)printf\"?\";else printf\"%.1f\",d/1048576/$dt}")
+        else _rxr="?"; _txr="?"; fi
+        _rxs=$(awk "BEGIN{printf\"%.1f\",($_rx-${net_base_rx[$_nm]})/1073741824}")
+        _txs=$(awk "BEGIN{printf\"%.1f\",($_tx-${net_base_tx[$_nm]})/1073741824}")
+        printf "   ★%s:   ↓ %7s MB/s   ↑ %7s MB/s   (%s ↓ %sGB ↑ %sGB)\n" "$_lblpad" "$_rxr" "$_txr" "$(t "누적" "total")" "$_rxs" "$_txs"
+        net_prev_rx[$_nm]=$_rx; net_prev_tx[$_nm]=$_tx
+      fi
+      _i=$((_i+1))
+    done
+  fi
   echo "╚═══════════════════════════════ %s · $(t "Ctrl-C 종료" "Ctrl-C to quit") ═══════════════════════════════╝" | sed "s/%s/$(date '+%H:%M:%S')/"
   sleep 2
 done

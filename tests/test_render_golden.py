@@ -180,6 +180,20 @@ class TestEdgeCases(unittest.TestCase):
         line = frame(_base_snap(None), CFG_KO, fixed_lt(0, 0, 0))[8]
         self.assertEqual(line.count("─"), 31 + 33)            # bash source: 31 left, 33 right
 
+    def test_gpu_busy_appended_to_gtt_line_when_present(self):
+        snap = _base_snap(JobState(job_type=JobType.TRAIN))
+        snap.memory.gpu_busy_pct = 62
+        gtt = frame(snap, CFG_KO, fixed_lt(0, 0, 0))[5]        # GTT is line index 5
+        self.assertTrue(gtt.rstrip().endswith("GPU 사용 62%"))
+        self.assertIn("GPU busy 62%", frame(snap, CFG_EN, fixed_lt(0, 0, 0))[5])
+
+    def test_gpu_busy_absent_leaves_gtt_line_and_frame_unchanged(self):
+        # gpu_busy_pct None (default) -> GTT line has no GPU-busy suffix and the frame
+        # stays the legacy 12 lines (additive: the byte-parity goldens are unaffected).
+        lines = frame(_base_snap(None), CFG_KO, fixed_lt(12, 0, 0))
+        self.assertEqual(len(lines), 12)
+        self.assertNotIn("GPU 사용", lines[5])
+
 
 if __name__ == "__main__":
     unittest.main()

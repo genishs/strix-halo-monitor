@@ -28,6 +28,7 @@ _LABELS: dict[str, tuple[str, str]] = {
     "unified_memory": ("통합메모리", "Unified Memory"),
     "gtt": ("GTT(모델)", "GTT(model)"),
     "rate": ("증가", "rate"),
+    "gpu_busy": ("GPU 사용", "GPU busy"),
     "vram": ("전용VRAM", "VRAM(ded.)"),
     "nvtop_note": ("(nvtop이 보는 값)", "(what nvtop sees)"),
     "host_ram": ("host RAM여유", "host RAM free"),
@@ -41,6 +42,32 @@ _LABELS: dict[str, tuple[str, str]] = {
     "ram_low": ("위험", "LOW"),
     "idle": ("대기 중", "idle"),
     "waiting": ("대기중", "waiting"),
+    "disk": ("디스크", "Disk"),
+    "free": ("여유", "free"),
+    "disk_na": ("사용불가", "unavailable"),
+    "network": ("네트워크", "Network"),
+    "net_total": ("누적", "total"),
+    "net_na": ("사용불가", "unavailable"),
+    "eval": ("평가", "Eval"),
+    "eval_task": ("태스크", "task"),
+    "eval_cur": ("현재", "current"),
+    "eval_compiling": ("컴파일·채점 중", "compiling & scoring"),
+    "eval_observed": ("관측", "observed"),
+    "eval_estimating": ("산정 대기", "estimating"),
+    "eval_score": ("점수", "score"),
+    "eval_done": ("완료", "done"),
+    "battery": ("배터리", "Battery"),
+    "battery_full": ("완충", "full"),
+    "battery_charging": ("충전 중", "charging"),
+    "battery_discharging": ("방전 중", "discharging"),
+    "battery_not_charging": ("충전 보류", "not charging"),
+    "battery_unknown": ("상태불명", "status unknown"),
+    "battery_ac_on": ("충전기 연결됨", "charger connected"),
+    "battery_ac_off": ("충전기 분리됨", "charger disconnected"),
+    "battery_discharge": ("방전", "discharge"),
+    "battery_remaining": ("잔여", "remaining"),
+    "battery_warn": ("낮음", "LOW"),
+    "battery_crit": ("위험", "CRITICAL"),
 }
 
 _NOTE: dict[EtaNote, tuple[str, str]] = {
@@ -77,8 +104,18 @@ def _quant_str(done, total) -> str:
 
 
 def smodel(job: JobState) -> str:
-    """Scoring model label: base_label -> unit name -> '?' (monitor.sh precedence)."""
-    return job.model_info.base_label or job.unit_name or "?"
+    """Eval/scoring run label: --label -> base_label -> unit name -> '?'.
+
+    ``eval_label`` (the eval run's own ``--label``) is preferred: it is the clean,
+    standard identifier for the run. base_label is a fallback and can be a truncated
+    path basename when ``--base`` points at a directory whose name contains a space.
+    """
+    return (
+        job.model_info.eval_label
+        or job.model_info.base_label
+        or job.unit_name
+        or "?"
+    )
 
 
 def phase_text(lang: Lang, job: JobState) -> str:
@@ -120,7 +157,9 @@ def phase_text(lang: Lang, job: JobState) -> str:
         return _pick(lang, f"🔧 채점준비: 양자화 {q}", f"🔧 Scoring prep: quantizing {q}")
 
     if p is Phase.SCORING:
-        last = job.last_gen if job.last_gen else t(lang, "waiting")
+        # Prefer the cleaned task name (new eval_hard_tsc format) over the verbose
+        # verbatim "generated [...]" line; fall back to that, then to "waiting".
+        last = job.cur_task or job.last_gen or t(lang, "waiting")
         return _pick(
             lang,
             f"🧮 채점 {smodel(job)} — 생성 {job.gen_done}/{job.heldout_total}, 최근: {last}",

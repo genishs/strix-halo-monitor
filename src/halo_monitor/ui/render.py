@@ -64,13 +64,17 @@ def render_frame(
         f"{dash * theme.umem_dash_right}"
     )
 
-    # 6. GTT
+    # 6. GTT (+ GPU utilization %, appended only when the amdgpu counter is present so
+    #    the byte-parity golden frames — whose fixtures carry no gpu_busy_pct — are
+    #    unchanged; additive, same principle as the disk/net/eval sections).
     pct = widgets.pct_int(mem.gtt_used_bytes, mem.gtt_total_bytes)
     l_gtt = (
         f"  {star}{i18n.t(lang, 'gtt')}:  {widgets.gb1(mem.gtt_used_bytes):>5} / "
         f"{widgets.gb0(mem.gtt_total_bytes)}GB  [{widgets.bar(pct, theme)}] {pct}%   "
         f"{i18n.t(lang, 'rate')} {widgets.rate(mem.gtt_rate_mb_s)} MB/s"
     )
+    if mem.gpu_busy_pct is not None:
+        l_gtt += f"   {i18n.t(lang, 'gpu_busy')} {mem.gpu_busy_pct}%"
 
     # 7. VRAM
     l_vram = (
@@ -106,6 +110,54 @@ def render_frame(
         f"{i18n.t(lang, 'unit')}: {job.unit_active or '?'}"
     )
 
+    # 11a2. battery/power section (Phase 6) — additive: only when this machine has a
+    # battery at all (BatteryCollector.available() is False on desktops/mini-PCs, so
+    # snapshot.battery.present stays False and this block is empty there — legacy
+    # and byte-parity golden frames are unaffected). Placed first among the
+    # additive blocks, immediately after the always-present legacy frame, so the
+    # discharge/low-battery alert is the first thing a glance at the screen lands
+    # on during an unattended run (see BatteryStat / collectors/battery.py).
+    battery_block: list[str] = []
+    if snapshot.battery.present:
+        sep_battery = (
+            f"  {dash * theme.battery_dash_left} {i18n.t(lang, 'battery')} "
+            f"{dash * theme.battery_dash_right}"
+        )
+        battery_block = [sep_battery, *widgets.battery_lines(snapshot.battery, lang, theme)]
+
+    # 11b. disk section (Phase 5) — additive: only when the snapshot carries disk
+    # data, so frames assembled without it (e.g. the byte-parity golden fixtures)
+    # stay identical to the legacy 12-line layout.
+    disk_block: list[str] = []
+    if snapshot.disks:
+        sep_disk = (
+            f"  {dash * theme.disk_dash_left} {i18n.t(lang, 'disk')} "
+            f"{dash * theme.disk_dash_right}"
+        )
+        disk_block = [sep_disk, *widgets.disk_lines(snapshot.disks, lang, theme)]
+
+    # 11c. network section (Phase 5) — additive, same rule as the disk block: only
+    # rendered when the snapshot carries interface data, so legacy/disk-only frames
+    # keep their exact layout.
+    net_block: list[str] = []
+    if snapshot.net:
+        sep_net = (
+            f"  {dash * theme.net_dash_left} {i18n.t(lang, 'network')} "
+            f"{dash * theme.net_dash_right}"
+        )
+        net_block = [sep_net, *widgets.net_lines(snapshot.net, lang, theme)]
+
+    # 11d. eval/grading section (Phase 5) — additive: present only while an eval job
+    # is generating/scoring, so training runs and the byte-parity golden frames are
+    # unaffected. Standard ML-eval terms (task N/total, tok/s, ETA) live here.
+    eval_block: list[str] = []
+    if snapshot.eval is not None:
+        sep_eval = (
+            f"  {dash * theme.eval_dash_left} {i18n.t(lang, 'eval')} "
+            f"{dash * theme.eval_dash_right}"
+        )
+        eval_block = [sep_eval, *widgets.eval_lines(snapshot.eval, lang, theme)]
+
     # 12. footer
     now = time.strftime("%H:%M:%S", localtime(snapshot.ts))
     footer = (
@@ -115,7 +167,8 @@ def render_frame(
 
     return "\n".join([
         header, l_progress, l_elapsed, l_model, sep_umem, l_gtt,
-        l_vram, l_ram, sep_power, l_power, l_sclk, footer,
+        l_vram, l_ram, sep_power, l_power, l_sclk,
+        *battery_block, *disk_block, *net_block, *eval_block, footer,
     ])
 
 
