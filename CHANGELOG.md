@@ -9,6 +9,52 @@ Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, 
 `--rich`/`--ascii` 렌더 선택, 차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임.
 로그 `[HH:MM:SS]` 타임스탬프 기반 epoch 산정은 여전히 회피(tz 함정).
 
+## [0.8.0] — 2026-08-29
+
+**배터리·전원 위젯 추가** — 충전기 용량 부족으로 밤샘 학습이 새벽에 강제중단됐던 사고
+(`gfx1151-4bit-training.md`: 100W 충전기·100W+ 부하 → 배터리 6%에서 05:00 강제종료)의 재발 방지.
+
+### Added
+- **`collectors/battery.py`(`BatteryCollector`)** — `power_supply/*/type` 파일로 배터리·충전기
+  장치를 이름이 아닌 **타입으로 자동탐지**(`Battery`/`Mains`/`USB`), `mounts.py`의 하드코딩 탐지
+  수정과 같은 원칙. `BAT0`/`ADP0`/`ucsi-source-psy-*` 같은 벤더별 이름에 의존하지 않는다.
+- **`model.BatteryStat`** — `present`(배터리 유무), `ac_online`(충전기 연결), `status`(원문),
+  `capacity_pct`, `discharging`, **`discharge_w`(방전 전력, 가장 중요한 값)**,
+  `time_remaining_s`(방전 중일 때만), `alert`(`ok`/`warn`/`crit`).
+  🔴 **충전기 자체의 정격 와트수는 sysfs에서 읽지 못한다** (이 장비의 `ucsi-source-psy-*`
+  USB-PD 노드는 실제로 전력을 공급 중에도 `online=0`, current/voltage 전부 0을 보고한다).
+  그래서 정격을 추정하는 대신 **배터리에서 실제로 빠져나가는 전력(discharge_w)** 을 보고한다 —
+  0이면 충전기가 부하를 감당 중, 양수면 충전기가 연결돼 있어도 배터리가 소모되는 중이라는 뜻이고,
+  이게 정확히 그 사고의 조기 신호다. `power_now`(µW) 우선, 없으면 `current_now×voltage_now` 대체,
+  잔여시간은 `energy_now`(없으면 `charge_now×voltage`) 기반.
+- **경보 임계치** `HALO_BATTERY_WARN_PCT`(기본 30) / `HALO_BATTERY_CRIT_PCT`(기본 15).
+  `alert_level()`: 잔량이 crit 미만이면 충전 중이라도 무조건 `crit`, **방전 중이면 잔량과
+  무관하게 최소 `warn`**(충전기가 연결된 채로 방전이 시작되는 것 자체가 34시간 무인 운전 중엔
+  이상신호이므로), 방전이 아니어도 warn 미만이면 `warn`.
+- **위젯(`ui/widgets.battery_lines`)** — sclk/유닛 줄 바로 다음(디스크·네트워크 섹션보다 위)에
+  배치해 화면을 스쳐 봐도 가장 먼저 눈에 들어오게 했다. 경보 마커는 2단계로 구분:
+  `⚠️낮음`(warn, 기존 RAM/디스크 경고와 같은 톤)과 **`🚨위험`(crit, 새 이모지 — 다른 경고와
+  섞이지 않게)**. 배터리가 없는 장비(데스크톱/미니PC)에서는 `BatteryCollector.available()`이
+  `False`를 반환해 위젯 자체가 조용히 사라진다 — 별도 on/off 스위치 불필요.
+- **테스트 +40** — 임계치 판정(`alert_level`) 단독 테스트, 타입 기반 탐지(비표준 이름·USB-PD
+  online=0 오판 방지), `power_now`/`current_now×voltage_now`/`charge_now×voltage` 3중 폴백,
+  배터리 없음, 충전 중, 방전 중(경고/위험 양쪽), AC 정보 전혀 없는 기기, 렌더 additive 검증
+  (배터리 없으면 기존 12줄 프레임 그대로), ko/en 라벨.
+
+### Changed
+- `model.Flags`에 `battery_low`(alert가 warn/crit이면 True), `model.Snapshot`에 `battery`
+  필드 추가(기본값 `BatteryStat()`이므로 배터리 없는 스냅샷은 기존 그대로 동작).
+- `config.Config`에 `battery_warn_pct`/`battery_crit_pct`, `loop.UpdateLoop`에 `battery`
+  콜렉터 인자 추가(다른 콜렉터와 동일하게 필수 — 실패해도 `_safe()`로 감싸 tick이 죽지 않음).
+
+### Notes
+- C2(무간섭) 유지: `power_supply/*` 아래 몇 개 텍스트 파일만 읽는다. `upower`/`acpi` 서브프로세스
+  없음, 폴링 루프 자체도 없음(다른 콜렉터처럼 매 틱 스냅샷 읽기).
+- ADR-0002(HALOJSON 상태줄)는 **미변경** — 그건 학습/채점 스크립트가 로그에 emit하는 계약이고
+  배터리는 로컬 sysfs 읽기라 별개다. 스키마에 필드를 더하지 않았으므로 갱신 대상 아님.
+- 실기(이 장비)에서 충전기 연결·`Full`·100%·방전 0W 프레임 확인. **방전/경보 경로는 이 장비가
+  현재 방전 중이 아니라 실기로 재현 불가 — 픽스처 모킹으로만 검증했다.**
+
 ## [0.7.0] — 2026-08-04
 
 **디스크 위젯이 마운트된 디스크를 다 못 보여주던 버그 수정** (하드코딩 목록 → 자동탐지).

@@ -56,6 +56,18 @@ _LABELS: dict[str, tuple[str, str]] = {
     "eval_estimating": ("산정 대기", "estimating"),
     "eval_score": ("점수", "score"),
     "eval_done": ("완료", "done"),
+    "battery": ("배터리", "Battery"),
+    "battery_full": ("완충", "full"),
+    "battery_charging": ("충전 중", "charging"),
+    "battery_discharging": ("방전 중", "discharging"),
+    "battery_not_charging": ("충전 보류", "not charging"),
+    "battery_unknown": ("상태불명", "status unknown"),
+    "battery_ac_on": ("충전기 연결됨", "charger connected"),
+    "battery_ac_off": ("충전기 분리됨", "charger disconnected"),
+    "battery_discharge": ("방전", "discharge"),
+    "battery_remaining": ("잔여", "remaining"),
+    "battery_warn": ("낮음", "LOW"),
+    "battery_crit": ("위험", "CRITICAL"),
 }
 
 _NOTE: dict[EtaNote, tuple[str, str]] = {

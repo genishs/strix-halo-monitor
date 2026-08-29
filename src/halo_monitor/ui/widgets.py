@@ -10,7 +10,9 @@ import time
 import unicodedata
 from typing import Callable
 
-from ..model import DiskStat, EvalPhase, EvalProgress, JobState, JobType, ModelInfo, NetStat, Phase
+from ..model import (
+    BatteryStat, DiskStat, EvalPhase, EvalProgress, JobState, JobType, ModelInfo, NetStat, Phase,
+)
 from . import i18n
 from .theme import Theme
 
@@ -257,3 +259,82 @@ def eval_lines(ev: EvalProgress | None, lang: str, theme: Theme) -> list[str]:
     else:
         parts.append(f"ETA {i18n.t(lang, 'eval_estimating')}")
     return [f"{head}   " + "   ".join(parts)]
+
+
+# --- battery / power widget (Phase 6) -------------------------------------- #
+_STATUS_KEYS: dict[str, str] = {
+    "full": "battery_full",
+    "charging": "battery_charging",
+    "discharging": "battery_discharging",
+    "not charging": "battery_not_charging",
+    "unknown": "battery_unknown",
+}
+
+
+def battery_pct(pct: int | None) -> str:
+    return "?" if pct is None else str(pct)
+
+
+def battery_status_text(lang: str, status: str | None) -> str:
+    """Translate the raw sysfs ``status`` string; unmapped values pass through
+    verbatim (rather than collapsing to "unknown") so an unexpected driver string
+    is still visible instead of silently swallowed."""
+    key = _STATUS_KEYS.get((status or "").strip().lower())
+    if key is not None:
+        return i18n.t(lang, key)
+    return status if status else i18n.t(lang, "battery_unknown")
+
+
+def battery_ac_text(lang: str, ac_online: bool | None) -> str:
+    if ac_online is True:
+        return i18n.t(lang, "battery_ac_on")
+    if ac_online is False:
+        return i18n.t(lang, "battery_ac_off")
+    return "?"
+
+
+def battery_alert_marker(alert: str, lang: str, theme: Theme) -> str:
+    """The eye-catching bit: plain ``✓`` when fine, ``⚠️`` warn, ``🚨`` critical.
+
+    Two distinct glyphs (not just one warning icon) on purpose — a 34h unattended
+    run deserves an unambiguous "look now" signal at the critical threshold, not
+    the same mark as every other low-space/low-RAM warning on the frame.
+    """
+    if alert == "crit":
+        return theme.battery_crit_prefix + i18n.t(lang, "battery_crit")
+    if alert == "warn":
+        return theme.ram_low_prefix + i18n.t(lang, "battery_warn")
+    return theme.ram_ok
+
+
+def battery_lines(bat: BatteryStat, lang: str, theme: Theme) -> list[str]:
+    """One rendered line for the battery/power widget (Phase 6).
+
+    Charger wattage is not readable from sysfs (see ``BatteryStat`` docstring), so
+    while discharging the line reports **discharge watts** instead — the number
+    that actually matters: it is exactly the shortfall between what the charger
+    delivers and what the system draws.
+
+    Discharging, below the warn threshold::
+
+        ★배터리:   28%   충전기 연결됨   방전 34W ⚠️낮음   잔여 0h18m00s
+
+    Charging/full, healthy::
+
+        ★배터리:   82%   충전기 연결됨   충전 중 ✓
+    """
+    head = f"   {theme.star}{i18n.t(lang, 'battery')}:"
+    pct = battery_pct(bat.capacity_pct)
+    ac = battery_ac_text(lang, bat.ac_online)
+    marker = battery_alert_marker(bat.alert, lang, theme)
+
+    if bat.discharging:
+        w = f"{bat.discharge_w:.0f}W" if bat.discharge_w is not None else "?W"
+        body = f"{pct}%   {ac}   {i18n.t(lang, 'battery_discharge')} {w} {marker}"
+        if bat.time_remaining_s is not None:
+            body += f"   {i18n.t(lang, 'battery_remaining')} {hms(bat.time_remaining_s)}"
+    else:
+        status = battery_status_text(lang, bat.status)
+        body = f"{pct}%   {ac}   {status} {marker}"
+
+    return [f"{head}   {body}"]

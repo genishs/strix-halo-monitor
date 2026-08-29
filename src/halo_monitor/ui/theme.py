@@ -46,9 +46,13 @@ class Theme:
     net_up: str = "↑"             # TX / upload arrow
     eval_dash_left: int = 34      # Phase 5 eval/grading section separator
     eval_dash_right: int = 34
+    battery_dash_left: int = 34   # Phase 6 battery/power section separator
+    battery_dash_right: int = 34
     # status flags
     ram_ok: str = "✓"
     ram_low_prefix: str = "⚠️"
+    battery_crit_prefix: str = "🚨"  # distinct from ram_low_prefix: the unattended-run
+                                     # "look at the screen NOW" marker (Phase 6)
 
 
 DEFAULT = Theme()

@@ -18,7 +18,7 @@ from halo_monitor.config import config_from_env
 from halo_monitor.jobs.base import UnitRef
 from halo_monitor.jobs.score import ScoreParser
 from halo_monitor.model import (
-    ClockStats, EvalPhase, EvalProgress, JobType, MemoryStats, Phase, PowerStats,
+    BatteryStat, ClockStats, EvalPhase, EvalProgress, JobType, MemoryStats, Phase, PowerStats,
     RawPower, Snapshot,
 )
 from halo_monitor.loop import UpdateLoop
@@ -113,7 +113,7 @@ def _loop(provider):
     return UpdateLoop(
         CFG, backend=None, memory=_Fake(MemoryStats()), power=_Fake(RawPower()),
         clocks=_Fake(ClockStats()), disk=_Fake([]), network=_Fake([]),
-        job_provider=provider, renderer=lambda s: None,
+        battery=_Fake(BatteryStat()), job_provider=provider, renderer=lambda s: None,
     )
 
 

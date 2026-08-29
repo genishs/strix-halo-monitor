@@ -95,6 +95,16 @@ class Config:
     #: tuple = widget disabled; a non-empty tuple = show exactly these.
     net_ifaces: tuple[NetTarget, ...] | None = None
     net_auto: str = NET_AUTO_DEFAULT     # auto-detect strategy when net_ifaces is None
+    # --- battery/power widget (Phase 6) ---
+    #: Alert thresholds on battery %, mirroring disk_warn_free_{gb,pct} (two floors,
+    #: not one). The widget itself needs no on/off switch: it is auto-hidden by
+    #: BatteryCollector.available() on hardware with no Battery-type power_supply
+    #: (desktops/mini-PCs), so there is nothing to disable on the machines that need
+    #: it. "warn" also fires unconditionally while discharging, at any %, because a
+    #: charger-covered box silently starting to drain IS the anomaly to catch during
+    #: an unattended run (see BatteryStat docstring / collectors/battery.py).
+    battery_warn_pct: float = 30.0
+    battery_crit_pct: float = 15.0
 
     def base_label_for(self, base_bn: str | None) -> str | None:
         """Map a base-model directory basename to a display label.
@@ -203,6 +213,8 @@ def config_from_env(
         disk_rescan_s=_float(env, "HALO_DISK_RESCAN_S", DEFAULT_DISK_RESCAN_S),
         net_ifaces=net_ifaces,
         net_auto=net_auto,
+        battery_warn_pct=_float(env, "HALO_BATTERY_WARN_PCT", 30.0),
+        battery_crit_pct=_float(env, "HALO_BATTERY_CRIT_PCT", 15.0),
     )
     return cfg
 

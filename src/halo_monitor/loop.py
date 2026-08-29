@@ -23,8 +23,8 @@ from .collectors.base import CollectContext, Collector
 from .collectors.backends.base import GpuBackend
 from .config import Config
 from .model import (
-    ClockStats, DiskStat, EtaNote, EvalPhase, EvalProgress, Flags, JobState, JobType,
-    MemoryStats, NetStat, Phase, PowerStats, RawNetIface, RawPower, Snapshot,
+    BatteryStat, ClockStats, DiskStat, EtaNote, EvalPhase, EvalProgress, Flags, JobState,
+    JobType, MemoryStats, NetStat, Phase, PowerStats, RawNetIface, RawPower, Snapshot,
 )
 
 # A job provider hides systemd detection + parsing behind one call so the loop stays
@@ -54,6 +54,7 @@ class UpdateLoop:
         clocks: Collector,
         disk: Collector,
         network: Collector,
+        battery: Collector,
         job_provider: JobProvider,
         renderer: Renderer,
     ) -> None:
@@ -64,6 +65,7 @@ class UpdateLoop:
         self.clocks = clocks
         self.disk = disk
         self.network = network
+        self.battery = battery
         self.job_provider = job_provider
         self.renderer = renderer
 
@@ -245,6 +247,7 @@ class UpdateLoop:
         disks: list[DiskStat] = _safe(lambda: self.disk.collect(self.ctx), [])
         raw_net: list[RawNetIface] = _safe(lambda: self.network.collect(self.ctx), [])
         net = self._net_stats(raw_net, dt)
+        battery: BatteryStat = _safe(lambda: self.battery.collect(self.ctx), BatteryStat())
         job: JobState | None = _safe(lambda: self.job_provider(now_wall), None)
         eval_progress = _safe(lambda: self._eval_progress(job, now_wall), None)
 
@@ -252,6 +255,7 @@ class UpdateLoop:
             ram_low=(mem.ram_free_gb is not None and mem.ram_free_gb < _RAM_LOW_GB),
             has_error=bool(job and job.error_count),
             disk_low=any(d.low for d in disks),
+            battery_low=(battery.alert != "ok"),
         )
         return Snapshot(
             ts=now_wall,
@@ -263,6 +267,7 @@ class UpdateLoop:
             disks=disks,
             net=net,
             eval=eval_progress,
+            battery=battery,
             flags=flags,
         )
 

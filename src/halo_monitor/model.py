@@ -255,6 +255,42 @@ class NetStat:
     present: bool = False
 
 
+@dataclass
+class BatteryStat:
+    """Battery/AC power picture (collectors/battery.py, Phase 6).
+
+    Absent on desktops/mini-PCs with no ``Battery``-type ``power_supply`` device —
+    ``present=False`` and every other field stays at its default; the renderer hides
+    the whole widget rather than showing an empty one (mirrors how ``DiskStat``
+    reports an unmounted drive, but here absence is machine-wide, not per-target).
+
+    **The AC-adapter's wattage is not readable from sysfs** on this hardware: the
+    ``ucsi-source-psy-*`` USB-PD nodes report ``online=0`` and no current/voltage
+    even while a charger is actively powering the box (only the ``Mains``/``ADP0``
+    node's ``online`` flag is meaningful). So instead of guessing a charger rating,
+    this reports **discharge power** — watts actually flowing OUT of the battery
+    right now. Zero means whatever charger is attached is covering the full system
+    load; positive means the load exceeds the charger and the battery is being
+    drawn down. That is the exact failure mode that force-stopped an overnight
+    training run once already (memory ``gfx1151-4bit-training.md``: a 100W charger
+    under a >100W load drained the battery to 6% and killed the job at 05:00 — not
+    a timeout, a power-budget miss with no visibility into it at the time).
+
+    ``discharging``/``alert`` are computed by the collector (not the renderer) so
+    the threshold logic is unit-testable the same way ``disk.is_low`` is.
+    """
+
+    present: bool = False               # True iff a Battery-type power_supply exists
+    ac_online: bool | None = None       # any non-battery supply reporting online=1
+    status: str | None = None           # raw sysfs status: Full/Charging/Discharging/...
+    capacity_pct: int | None = None
+    discharging: bool = False           # status==Discharging, or (no AC + status unknown)
+    discharge_w: float | None = None    # watts drawn from the battery now; 0.0 if not
+                                         # discharging; None only when unmeasurable
+    time_remaining_s: int | None = None # energy_now/discharge_w runway; only while discharging
+    alert: str = "ok"                   # "ok" | "warn" | "crit" — collectors/battery.py
+
+
 class EvalPhase(str, Enum):
     """Sub-stage of an eval/grading run, for the additive Eval widget (Phase 5)."""
 
@@ -298,6 +334,7 @@ class Flags:
     ram_low: bool = False
     has_error: bool = False
     disk_low: bool = False            # any configured mount below its free threshold
+    battery_low: bool = False         # battery alert is "warn" or "crit" (Phase 6)
 
 
 @dataclass
@@ -314,4 +351,5 @@ class Snapshot:
     disks: list[DiskStat] = field(default_factory=list)
     net: list[NetStat] = field(default_factory=list)
     eval: EvalProgress | None = None       # present only for an active eval/grading job
+    battery: "BatteryStat" = field(default_factory=lambda: BatteryStat())
     flags: Flags = field(default_factory=Flags)
