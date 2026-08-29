@@ -110,6 +110,21 @@ def render_frame(
         f"{i18n.t(lang, 'unit')}: {job.unit_active or '?'}"
     )
 
+    # 11a2. battery/power section (Phase 6) — additive: only when this machine has a
+    # battery at all (BatteryCollector.available() is False on desktops/mini-PCs, so
+    # snapshot.battery.present stays False and this block is empty there — legacy
+    # and byte-parity golden frames are unaffected). Placed first among the
+    # additive blocks, immediately after the always-present legacy frame, so the
+    # discharge/low-battery alert is the first thing a glance at the screen lands
+    # on during an unattended run (see BatteryStat / collectors/battery.py).
+    battery_block: list[str] = []
+    if snapshot.battery.present:
+        sep_battery = (
+            f"  {dash * theme.battery_dash_left} {i18n.t(lang, 'battery')} "
+            f"{dash * theme.battery_dash_right}"
+        )
+        battery_block = [sep_battery, *widgets.battery_lines(snapshot.battery, lang, theme)]
+
     # 11b. disk section (Phase 5) — additive: only when the snapshot carries disk
     # data, so frames assembled without it (e.g. the byte-parity golden fixtures)
     # stay identical to the legacy 12-line layout.
@@ -153,7 +168,7 @@ def render_frame(
     return "\n".join([
         header, l_progress, l_elapsed, l_model, sep_umem, l_gtt,
         l_vram, l_ram, sep_power, l_power, l_sclk,
-        *disk_block, *net_block, *eval_block, footer,
+        *battery_block, *disk_block, *net_block, *eval_block, footer,
     ])
 
 

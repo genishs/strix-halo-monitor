@@ -10,7 +10,7 @@ import _util  # noqa: F401
 from halo_monitor.config import config_from_env
 from halo_monitor.loop import UpdateLoop
 from halo_monitor.model import (
-    ClockStats, DiskStat, JobState, JobType, MemoryStats, RawNetIface, RawPower,
+    BatteryStat, ClockStats, DiskStat, JobState, JobType, MemoryStats, RawNetIface, RawPower,
 )
 
 
@@ -29,7 +29,7 @@ class _Fake:
         return v
 
 
-def make_loop(mem, raw, clk, job=None, disks=None, net=None):
+def make_loop(mem, raw, clk, job=None, disks=None, net=None, battery=None):
     cfg = config_from_env(env={})
     return UpdateLoop(
         cfg,
@@ -39,6 +39,7 @@ def make_loop(mem, raw, clk, job=None, disks=None, net=None):
         clocks=_Fake(clk),
         disk=_Fake([] if disks is None else disks),
         network=_Fake([] if net is None else net),
+        battery=_Fake(BatteryStat() if battery is None else battery),
         job_provider=lambda now: job,
         renderer=lambda snap: None,
     )
@@ -107,6 +108,27 @@ class TestLoopDeltas(unittest.TestCase):
         snap = loop.tick(0.0, 1000.0)                        # must not raise
         self.assertEqual(snap.disks, [])                     # blank for the tick
         self.assertFalse(snap.flags.disk_low)
+
+    def test_battery_passthrough_and_flag_ok(self):
+        bat = BatteryStat(present=True, capacity_pct=100, status="Full", alert="ok")
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), battery=bat)
+        snap = loop.tick(0.0, 1000.0)
+        self.assertIs(snap.battery, bat)                    # collected into Snapshot verbatim
+        self.assertFalse(snap.flags.battery_low)
+
+    def test_battery_warn_and_crit_set_the_flag(self):
+        for alert in ("warn", "crit"):
+            bat = BatteryStat(present=True, capacity_pct=10, discharging=True, alert=alert)
+            loop = make_loop(MemoryStats(), RawPower(), ClockStats(), battery=bat)
+            snap = loop.tick(0.0, 1000.0)
+            self.assertTrue(snap.flags.battery_low, alert)
+
+    def test_battery_collector_raising_is_survived(self):
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats())
+        loop.battery = _Fake(RuntimeError("sysfs boom"))
+        snap = loop.tick(0.0, 1000.0)                        # must not raise
+        self.assertFalse(snap.battery.present)               # blank default for the tick
+        self.assertFalse(snap.flags.battery_low)
 
 
 class TestNetDeltas(unittest.TestCase):

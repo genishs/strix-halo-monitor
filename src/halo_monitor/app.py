@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Callable
 
 from .collectors.backends import select_backend
+from .collectors.battery import BatteryCollector
 from .collectors.clocks import ClockCollector
 from .collectors.disk import DiskCollector
 from .collectors.memory import MemoryCollector
@@ -52,6 +53,7 @@ def build_loop(cfg: Config, *, out=None) -> UpdateLoop:
         clocks=ClockCollector(),
         disk=DiskCollector(),
         network=NetworkCollector(),
+        battery=BatteryCollector(),
         job_provider=make_job_provider(cfg),
         renderer=make_renderer(cfg, out=out),
     )
