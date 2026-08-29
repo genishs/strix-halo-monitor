@@ -105,6 +105,21 @@ class Config:
     #: an unattended run (see BatteryStat docstring / collectors/battery.py).
     battery_warn_pct: float = 30.0
     battery_crit_pct: float = 15.0
+    # --- temperature widget (Phase 7) ---
+    #: Defaults for GPU (amdgpu edge) and CPU (k10temp Tctl). A sensor's own sysfs
+    #: temp*_max/temp*_crit value, when sane, wins over these (see
+    #: collectors/temperature.py: _sane_threshold). Picked from this box's own
+    #: readings during a 34h GPU campaign — GPU edge 88°C / CPU Tctl 87°C is
+    #: *normal* sustained-load territory on this Strix Halo APU — so warn sits
+    #: ~7-8°C above that (never nags during ordinary training) and crit sits near
+    #: this class of silicon's own throttle point.
+    temp_warn_c: float = 95.0
+    temp_crit_c: float = 105.0
+    #: NVMe runs much cooler than CPU/GPU and consumer drives commonly begin
+    #: thermal throttling well below 90°C, so it gets its own lower floor
+    #: (observed on this box: 53-64°C at idle/light load during the same campaign).
+    nvme_temp_warn_c: float = 70.0
+    nvme_temp_crit_c: float = 80.0
 
     def base_label_for(self, base_bn: str | None) -> str | None:
         """Map a base-model directory basename to a display label.
@@ -215,6 +230,10 @@ def config_from_env(
         net_auto=net_auto,
         battery_warn_pct=_float(env, "HALO_BATTERY_WARN_PCT", 30.0),
         battery_crit_pct=_float(env, "HALO_BATTERY_CRIT_PCT", 15.0),
+        temp_warn_c=_float(env, "HALO_TEMP_WARN_C", 95.0),
+        temp_crit_c=_float(env, "HALO_TEMP_CRIT_C", 105.0),
+        nvme_temp_warn_c=_float(env, "HALO_NVME_TEMP_WARN_C", 70.0),
+        nvme_temp_crit_c=_float(env, "HALO_NVME_TEMP_CRIT_C", 80.0),
     )
     return cfg
 

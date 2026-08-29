@@ -125,6 +125,21 @@ def render_frame(
         )
         battery_block = [sep_battery, *widgets.battery_lines(snapshot.battery, lang, theme)]
 
+    # 11a3. temperature section (Phase 7) — additive: only when the snapshot carries
+    # sensor data (a box with no readable GPU/CPU/NVMe hwmon sensor renders nothing
+    # here, so legacy and byte-parity golden frames are unaffected). Placed right
+    # after the battery block — GPU edge temp is the primary signal for judging
+    # thermal throttling during a training/scoring run, so it belongs with the
+    # other "look here during an unattended run" alerts near the top, right before
+    # the disk section it is most useful alongside (NVMe temps).
+    temp_block: list[str] = []
+    if snapshot.temps:
+        sep_temp = (
+            f"  {dash * theme.temp_dash_left} {i18n.t(lang, 'temp')} "
+            f"{dash * theme.temp_dash_right}"
+        )
+        temp_block = [sep_temp, *widgets.temp_lines(snapshot.temps, lang, theme)]
+
     # 11b. disk section (Phase 5) — additive: only when the snapshot carries disk
     # data, so frames assembled without it (e.g. the byte-parity golden fixtures)
     # stay identical to the legacy 12-line layout.
@@ -168,7 +183,7 @@ def render_frame(
     return "\n".join([
         header, l_progress, l_elapsed, l_model, sep_umem, l_gtt,
         l_vram, l_ram, sep_power, l_power, l_sclk,
-        *battery_block, *disk_block, *net_block, *eval_block, footer,
+        *battery_block, *temp_block, *disk_block, *net_block, *eval_block, footer,
     ])
 
 

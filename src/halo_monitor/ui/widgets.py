@@ -12,6 +12,7 @@ from typing import Callable
 
 from ..model import (
     BatteryStat, DiskStat, EvalPhase, EvalProgress, JobState, JobType, ModelInfo, NetStat, Phase,
+    TempStat,
 )
 from . import i18n
 from .theme import Theme
@@ -338,3 +339,39 @@ def battery_lines(bat: BatteryStat, lang: str, theme: Theme) -> list[str]:
         body = f"{pct}%   {ac}   {status} {marker}"
 
     return [f"{head}   {body}"]
+
+
+# --- temperature widget (Phase 7) ------------------------------------------ #
+def temp_marker(alert: str, lang: str, theme: Theme) -> str:
+    """``✓`` / ``⚠️높음`` / ``🚨위험`` — same three-tier family as
+    :func:`disk_flag`/:func:`battery_alert_marker`, worded for "too hot" rather
+    than "too low" (a temperature alert is never about a value being low)."""
+    if alert == "crit":
+        return theme.battery_crit_prefix + i18n.t(lang, "temp_crit")
+    if alert == "warn":
+        return theme.ram_low_prefix + i18n.t(lang, "temp_warn")
+    return theme.ram_ok
+
+
+def temp_lines(temps: list[TempStat], lang: str, theme: Theme) -> list[str]:
+    """One rendered line per sensor (label columns aligned), same layout family as
+    :func:`disk_lines`/:func:`net_lines`::
+
+        ★GPU:     88°C ✓
+        ★CPU:     87°C ✓
+        ★NVMe1:   53°C ✓
+        ★NVMe2:   64°C ✓
+
+    A sensor this box doesn't have is simply absent from ``temps`` (no
+    "unavailable" row — see ``TempStat`` docstring), so an empty list means no
+    section at all rather than an all-``?`` block.
+    """
+    if not temps:
+        return []
+    label_w = max(_disp_width(t.label) for t in temps)
+    out: list[str] = []
+    for t in temps:
+        head = f"   {theme.star}{_pad_label(t.label, label_w)}:"
+        value = "?" if t.temp_c is None else f"{t.temp_c:.0f}"
+        out.append(f"{head}   {value}°C  {temp_marker(t.alert, lang, theme)}")
+    return out
