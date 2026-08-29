@@ -18,6 +18,7 @@ from .collectors.disk import DiskCollector
 from .collectors.memory import MemoryCollector
 from .collectors.network import NetworkCollector
 from .collectors.power import PowerCollector
+from .collectors.temperature import TemperatureCollector
 from .config import Config, config_from_env
 from .jobs import detect
 from .jobs.base import parse_job
@@ -54,6 +55,7 @@ def build_loop(cfg: Config, *, out=None) -> UpdateLoop:
         disk=DiskCollector(),
         network=NetworkCollector(),
         battery=BatteryCollector(),
+        temperature=TemperatureCollector(),
         job_provider=make_job_provider(cfg),
         renderer=make_renderer(cfg, out=out),
     )

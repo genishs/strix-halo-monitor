@@ -48,6 +48,8 @@ class Theme:
     eval_dash_right: int = 34
     battery_dash_left: int = 34   # Phase 6 battery/power section separator
     battery_dash_right: int = 34
+    temp_dash_left: int = 34      # Phase 7 temperature section separator
+    temp_dash_right: int = 34
     # status flags
     ram_ok: str = "✓"
     ram_low_prefix: str = "⚠️"
