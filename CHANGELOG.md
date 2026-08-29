@@ -23,6 +23,19 @@ Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, 
 **배터리·전원 위젯 추가** (내부번호 0.8.0) + **Phase 5 전체**(디스크·네트워크·채점·GPU 위젯,
 디스크 자동탐지, 모델명 버그 수정 — 내부번호 0.3.0~0.7.0). 상세는 아래 각 항목 참조.
 
+### Fixed
+- **`tests/test_power_collector.py`의 RAPL sysfs 픽스처를 콜론 경로 커밋에서 런타임 생성으로 전환**
+  (이슈 #7). `sys/class/powercap/intel-rapl:0`(`:0:0` 코어 도메인 포함) 은 실제 Linux sysfs
+  레이아웃을 그대로 반영한 경로지만, NTFS는 `:` 를 대체 데이터 스트림 구분자로 예약해
+  `git checkout` 은 물론 **`os.makedirs()` 런타임 생성조차 거부**한다 — 이 장비의
+  `/mnt/data`(NTFS 공유 볼륨, `fuseblk`) 체크아웃에서 실측 재현. 커밋된 픽스처 파일 4개가
+  조용히 사라지면서 `test_full_fixture_raw_readings`·`test_no_backend_no_amdgpu_watts` 가
+  RED 였다. 정적 픽스처 트리(`tests/fixtures/sysfs`, colon-free)를
+  `tempfile.TemporaryDirectory()`(시스템 실제 임시 디렉터리 — 체크아웃과 다른 파일시스템)로
+  복사한 뒤 그 위에 RAPL 콜론 디렉터리·파일을 매 테스트 클래스 실행 시 새로 써 넣는 방식으로
+  변경. 프로덕션 `power.py`의 `intel-rapl:0` 경로 문자열은 실제 Linux 런타임 sysfs 경로이므로
+  그대로 유지(변경 없음).
+
 ## [0.8.0] — 2026-08-29 *(내부번호 — v0.5.0 으로 릴리즈됨)*
 
 **배터리·전원 위젯 추가** — 충전기 용량 부족으로 밤샘 학습이 새벽에 강제중단됐던 사고
