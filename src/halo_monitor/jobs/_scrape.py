@@ -19,10 +19,21 @@ _RE_STEP = re.compile(r"step (\d+) \|")
 _RE_SSTEP = re.compile(r"([0-9.]+)s/step")
 _RE_LOSS = re.compile(r"loss\(avg8\) ([0-9.]+)")
 
-# --- scoring markers ------------------------------------------------------- #
+# --- scoring / eval markers ------------------------------------------------ #
 _RE_REPLACED = re.compile(r"HQQ 스트리밍 치환 완료")
 _RE_GENERATED = re.compile(r"generated \[")
 _RE_LAST_GEN = re.compile(r"generated \[.*")
+# task NAME inside a generated line — works for both the old ("generated [task-x] ...")
+# and new eval_hard_tsc format ("generated [pyexpr_eval      ]  842 chars ..."), trailing
+# pad spaces stripped.
+_RE_GEN_NAME = re.compile(r"generated \[([^\]]+?)\s*\]")
+# per-task new tokens (eval_hard_tsc: "... new=512" / "... new=512 TRUNC!")
+_RE_GEN_NEW = re.compile(r"generated \[[^\]]*\][^\n]*?\bnew=(\d+)")
+# eval compile/score stage and final result line
+_RE_RUN_TSC = re.compile(r"running tsc")
+_RE_EVAL_SCORE = re.compile(r"SCORE\s+([0-9.]+)/(\d+)\s*=\s*([0-9.]+)%")
+_RE_EVAL_CLEAN = re.compile(r"CLEAN\s+(\d+)/(\d+)\s+compiles")
+_RE_EVAL_SAVED = re.compile(r"saved\s*→\s*eval_results/")
 
 # --- errors (case-insensitive, monitor.sh set) ----------------------------- #
 _RE_ERRORS = re.compile(
@@ -148,4 +159,46 @@ def score_progress(text: str) -> dict[str, Any]:
         "last_gen": last_gen,
         "quant_done": q[0] if q else None,
         "quant_total": q[1] if q else None,
+    }
+
+
+# --- eval detail (eval_hard_tsc.py, Phase 5 grading widget) ----------------- #
+def eval_progress(text: str) -> dict[str, Any]:
+    """Scrape eval-specific detail on top of :func:`score_progress`.
+
+    Additive to the scoring scrape: the current task name, cumulative generated
+    tokens (for observed throughput), whether the tsc compile/score stage started,
+    and the final SCORE line when the run finishes. All best-effort — a missing
+    field is ``None``/``False``, never an exception.
+    """
+    cur_task = None
+    for m in _RE_GEN_NAME.finditer(text):
+        cur_task = m.group(1)
+
+    gen_tokens = None
+    tok_matches = _RE_GEN_NEW.findall(text)
+    if tok_matches:
+        gen_tokens = sum(int(t) for t in tok_matches)
+
+    ms = None
+    for ms in _RE_EVAL_SCORE.finditer(text):
+        pass
+    score = float(ms.group(1)) if ms else None
+    smax = int(ms.group(2)) if ms else None
+    pct = float(ms.group(3)) if ms else None
+
+    mc = None
+    for mc in _RE_EVAL_CLEAN.finditer(text):
+        pass
+    clean = int(mc.group(1)) if mc else None
+
+    return {
+        "cur_task": cur_task,
+        "gen_tokens": gen_tokens,
+        "compiling": bool(_RE_RUN_TSC.search(text)),
+        "saved": bool(_RE_EVAL_SAVED.search(text)),
+        "eval_score": score,
+        "eval_max": smax,
+        "eval_pct": pct,
+        "eval_clean": clean,
     }

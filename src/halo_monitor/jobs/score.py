@@ -12,11 +12,18 @@ from ..config import Config
 from ..model import JobState, JobType, Phase, Source
 from ..status_schema import parse_last_status
 from . import base
-from ._scrape import as_int, as_str, count_errors, score_progress
+from ._scrape import as_int, as_str, count_errors, eval_progress, score_progress
 from .eta import eta_for
 from .modelinfo import parse_model_info
 
 _SCORE_PHASES = {Phase.IDLE, Phase.SCORE_PREP, Phase.SCORING, Phase.FINISHED}
+
+#: Unit-name substrings that mark an eval/scoring/grading run (all handled by this
+#: parser). The eval script (``eval_hard_tsc.py``) is launched under several unit
+#: names over time — ``gpujob-score-*`` (legacy) and ``gpujob-grade*`` (current) —
+#: so match all synonyms rather than the single literal ``score`` (the miss that
+#: made ``gpujob-grade141b-*`` render as a stuck training job).
+_EVAL_UNIT_MARKERS = ("score", "grade", "eval")
 
 
 def _is_active(active: str | None) -> bool:
@@ -32,7 +39,11 @@ def _phase_or_none(s) -> Phase | None:
 
 @base.register
 class ScoreParser:
-    """Handles units whose name contains ``score`` (registered before TrainParser)."""
+    """Handles eval/scoring/grading units (registered before TrainParser).
+
+    Matches unit names containing ``score``/``grade``/``eval`` — all the aliases the
+    heldout eval job (``eval_hard_tsc.py``) has run under.
+    """
 
     name = "score"
 
@@ -40,7 +51,8 @@ class ScoreParser:
         self.cfg = cfg
 
     def matches(self, unit: base.UnitRef) -> bool:
-        return "score" in unit.name.lower()
+        name = unit.name.lower()
+        return any(marker in name for marker in _EVAL_UNIT_MARKERS)
 
     def parse(self, log_text: str, unit: base.UnitRef, now: float) -> JobState:
         mi = parse_model_info(log_text, self.cfg)
@@ -50,6 +62,7 @@ class ScoreParser:
             elapsed = max(0, int(now - unit.start_epoch))
 
         scraped = score_progress(log_text)
+        ev = eval_progress(log_text)
         status = parse_last_status(log_text)
 
         # JSON refinement (progress numbers + prep/scoring phase), if present.
@@ -108,6 +121,13 @@ class ScoreParser:
             gen_done=gen_done,
             heldout_total=heldout_total,
             last_gen=last_gen,
+            cur_task=ev["cur_task"],
+            gen_tokens=ev["gen_tokens"],
+            eval_compiling=ev["compiling"],
+            eval_score=ev["eval_score"],
+            eval_max=ev["eval_max"],
+            eval_pct=ev["eval_pct"],
+            eval_clean=ev["eval_clean"],
             eta_seconds=eta_s,
             eta_note=eta_note,
             error_count=errs,

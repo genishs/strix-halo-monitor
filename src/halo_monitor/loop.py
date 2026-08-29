@@ -22,7 +22,10 @@ from typing import Callable
 from .collectors.base import CollectContext, Collector
 from .collectors.backends.base import GpuBackend
 from .config import Config
-from .model import ClockStats, Flags, JobState, MemoryStats, PowerStats, RawPower, Snapshot
+from .model import (
+    ClockStats, DiskStat, EtaNote, EvalPhase, EvalProgress, Flags, JobState, JobType,
+    MemoryStats, NetStat, Phase, PowerStats, RawNetIface, RawPower, Snapshot,
+)
 
 # A job provider hides systemd detection + parsing behind one call so the loop stays
 # HW/systemd-independent. Wired in app.py to detect.find_active_unit + jobs.parse_job.
@@ -49,6 +52,8 @@ class UpdateLoop:
         memory: Collector,
         power: Collector,
         clocks: Collector,
+        disk: Collector,
+        network: Collector,
         job_provider: JobProvider,
         renderer: Renderer,
     ) -> None:
@@ -57,6 +62,8 @@ class UpdateLoop:
         self.memory = memory
         self.power = power
         self.clocks = clocks
+        self.disk = disk
+        self.network = network
         self.job_provider = job_provider
         self.renderer = renderer
 
@@ -65,6 +72,15 @@ class UpdateLoop:
         self._prev_gtt: int | None = None
         self._prev_pkg_uj: int | None = None
         self._prev_core_uj: int | None = None
+        # per-interface previous counters (for rate) and first-seen counters
+        # (for session totals). Keyed by interface name.
+        self._prev_net: dict[str, tuple[int, int]] = {}
+        self._net_baseline: dict[str, tuple[int, int]] = {}
+        # eval/grading generation observation (the eval log has no per-line
+        # timestamps, so throughput/ETA are observed here across ticks).
+        self._eval_unit: str | None = None       # unit whose generation we are timing
+        self._eval_gen_start: float | None = None  # wall time generation first observed
+        self._eval_from_zero: bool = False       # did we see generation begin at 0 tasks?
 
         self._stop = False
         self._resized = False
@@ -100,6 +116,120 @@ class UpdateLoop:
                 ps.gpu_w = gpu if gpu > 0 else 0.0
         return ps
 
+    def _net_stats(self, raw: list[RawNetIface], dt: float) -> list[NetStat]:
+        """Per-interface RX/TX byte counters -> throughput (MB/s) + session totals.
+
+        Rate = counter delta / elapsed, mirroring ``_gtt_rate_mb_s``. A negative
+        delta (counter reset, e.g. interface down/up) yields ``None`` for that rate
+        this tick — the same wraparound guard the RAPL-watts path uses. The session
+        total is the counter's growth since the first tick that saw the interface.
+        """
+        out: list[NetStat] = []
+        for r in raw:
+            if not r.present or r.rx_bytes is None or r.tx_bytes is None:
+                # Keep no state for an unreadable interface; drop any stale prev so a
+                # re-appearance re-primes cleanly rather than spiking on a huge delta.
+                self._prev_net.pop(r.name, None)
+                out.append(NetStat(name=r.name, label=r.label, present=False))
+                continue
+
+            prev = self._prev_net.get(r.name)
+            self._prev_net[r.name] = (r.rx_bytes, r.tx_bytes)
+
+            rx_mb_s = tx_mb_s = None
+            if prev is not None and dt > 0:
+                drx, dtx = r.rx_bytes - prev[0], r.tx_bytes - prev[1]
+                if drx >= 0:
+                    rx_mb_s = drx / 1048576.0 / dt
+                if dtx >= 0:
+                    tx_mb_s = dtx / 1048576.0 / dt
+
+            base = self._net_baseline.setdefault(r.name, (r.rx_bytes, r.tx_bytes))
+            rx_session = r.rx_bytes - base[0] if r.rx_bytes >= base[0] else None
+            tx_session = r.tx_bytes - base[1] if r.tx_bytes >= base[1] else None
+
+            out.append(NetStat(
+                name=r.name, label=r.label, present=True,
+                rx_mb_s=rx_mb_s, tx_mb_s=tx_mb_s,
+                rx_session_bytes=rx_session, tx_session_bytes=tx_session,
+            ))
+        return out
+
+    def _eval_progress(self, job: JobState | None, now_wall: float) -> EvalProgress | None:
+        """Assemble the Eval widget for an active eval/grading job (Phase 5).
+
+        Only present for a SCORE job that has reached generation (or beyond) — during
+        prep/quantization the main progress line already tells the story. Throughput
+        and ETA are *observed* across ticks because the eval log carries no per-line
+        timestamps: we time from the first tick we saw this unit generating.
+
+        ``tok_s`` is reported only when we watched generation from 0 tasks (otherwise
+        we'd divide tokens we never saw start by a too-short window). The ETA is a
+        rough generation-scoped linear extrapolation, and it is also written back onto
+        ``job`` so the main ETA line agrees with the widget (the parser's own estimate
+        is unit-elapsed, which for a grading run is inflated by the long quant phase).
+        """
+        if job is None or job.job_type is not JobType.SCORE:
+            self._eval_unit = None
+            self._eval_gen_start = None
+            return None
+
+        generating = job.phase is Phase.SCORING
+        finished = job.phase is Phase.FINISHED
+        if not (generating or finished):
+            return None  # prep/quantizing — main line covers it, no widget yet
+
+        # Reset observation state when the monitored unit changes.
+        if job.unit_name != self._eval_unit:
+            self._eval_unit = job.unit_name
+            self._eval_gen_start = None
+            self._eval_from_zero = False
+
+        # Start (or note) the generation-observation window on first sight.
+        if generating and self._eval_gen_start is None:
+            self._eval_gen_start = now_wall
+            self._eval_from_zero = not job.gen_done  # True when 0/None tasks so far
+
+        done, total = job.gen_done, job.heldout_total
+        gen_elapsed = None
+        if self._eval_gen_start is not None:
+            gen_elapsed = max(0.0, now_wall - self._eval_gen_start)
+
+        # Observed average throughput — only when honestly measurable.
+        tok_s = None
+        if (
+            self._eval_from_zero and job.gen_tokens
+            and gen_elapsed is not None and gen_elapsed > 1.0
+        ):
+            tok_s = job.gen_tokens / gen_elapsed
+
+        # Observed, generation-scoped ETA (rough); estimating before the first task.
+        eta_s: int | None = None
+        eta_note: EtaNote | None = None
+        if not finished:
+            if done and total and gen_elapsed is not None and gen_elapsed > 1.0 and done >= 1:
+                eta_s = max(0, int(gen_elapsed * (total - done) / done))
+                eta_note = EtaNote.ROUGH_HIGH_VARIANCE
+            else:
+                eta_note = EtaNote.ESTIMATING_FIRST_TASK
+            # Keep the main ETA line consistent with this observed value.
+            job.eta_seconds = eta_s
+            job.eta_note = eta_note
+
+        if finished:
+            phase = EvalPhase.FINISHED
+        elif job.eval_compiling and (not total or (done or 0) >= total):
+            phase = EvalPhase.COMPILING
+        else:
+            phase = EvalPhase.GENERATING
+
+        label = job.model_info.eval_label or job.unit_name
+        return EvalProgress(
+            label=label, done=done, total=total, cur_task=job.cur_task,
+            phase=phase, tok_s=tok_s, eta_s=eta_s, eta_note=eta_note,
+            score=job.eval_score, max=job.eval_max, pct=job.eval_pct, clean=job.eval_clean,
+        )
+
     # -- one tick --------------------------------------------------------- #
     def tick(self, now_mono: float, now_wall: float) -> Snapshot:
         dt = 0.0 if self._prev_mono is None else max(0.0, now_mono - self._prev_mono)
@@ -112,11 +242,16 @@ class UpdateLoop:
         power = self._watts(raw, dt)
 
         clk: ClockStats = _safe(lambda: self.clocks.collect(self.ctx), ClockStats())
+        disks: list[DiskStat] = _safe(lambda: self.disk.collect(self.ctx), [])
+        raw_net: list[RawNetIface] = _safe(lambda: self.network.collect(self.ctx), [])
+        net = self._net_stats(raw_net, dt)
         job: JobState | None = _safe(lambda: self.job_provider(now_wall), None)
+        eval_progress = _safe(lambda: self._eval_progress(job, now_wall), None)
 
         flags = Flags(
             ram_low=(mem.ram_free_gb is not None and mem.ram_free_gb < _RAM_LOW_GB),
             has_error=bool(job and job.error_count),
+            disk_low=any(d.low for d in disks),
         )
         return Snapshot(
             ts=now_wall,
@@ -125,6 +260,9 @@ class UpdateLoop:
             memory=mem,
             power=power,
             clocks=clk,
+            disks=disks,
+            net=net,
+            eval=eval_progress,
             flags=flags,
         )
 

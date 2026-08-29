@@ -21,6 +21,14 @@ class TestScoreParserRegex(unittest.TestCase):
         js = score(load_log("score_running.log"))
         self.assertEqual(js.job_type, JobType.SCORE)
 
+    def test_routing_grade_and_eval_unit_names(self):
+        # Regression: the live eval job runs as gpujob-grade141b-* (not *score*), and
+        # was mis-routed to the training parser -> stuck "quantizing". All eval aliases
+        # must route here.
+        for name in ("gpujob-grade141b-20260731-011405", "gpujob-eval-mixtral", "SCORE-x"):
+            js = score(load_log("score_running.log"), name=name)
+            self.assertEqual(js.job_type, JobType.SCORE, name)
+
     def test_scoring_phase_progress_and_eta(self):
         js = score(load_log("score_running.log"), start=200, now=200 + 3600)
         self.assertEqual(js.phase, Phase.SCORING)

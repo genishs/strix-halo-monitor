@@ -58,6 +58,7 @@ class MemoryCollector:
             gtt_used_bytes=gpu_mem.gtt_used_bytes,
             gtt_total_bytes=gpu_mem.gtt_total_bytes,
             vram_used_bytes=gpu_mem.vram_used_bytes,
+            gpu_busy_pct=gpu_mem.gpu_busy_pct,   # amdgpu utilization %, from the backend
             ram_free_gb=ram_free_gb,
             swap_used_gb=swap_used_gb,
             gtt_rate_mb_s=None,  # loop-owned delta; never set here

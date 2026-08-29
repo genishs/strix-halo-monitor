@@ -87,6 +87,7 @@ class ModelInfo:
     epochs: int | None = None        # --epochs
     adapter: str | None = None       # basename of --adapter (scoring)
     heldout: bool = False            # --heldout present (scoring)
+    eval_label: str | None = None    # --label: eval run name (eval_hard_tsc.py), for display
 
 
 @dataclass
@@ -109,9 +110,16 @@ class JobState:
     total: int | None = None
     loss: float | None = None
     sstep: float | None = None            # seconds per optimizer step
-    gen_done: int | None = None           # scoring: heldout tasks generated
-    heldout_total: int | None = None      # scoring: total heldout tasks
-    last_gen: str | None = None           # scoring: last "generated [...]" line
+    gen_done: int | None = None           # scoring/eval: heldout tasks generated
+    heldout_total: int | None = None      # scoring/eval: total heldout tasks
+    last_gen: str | None = None           # scoring: last "generated [...]" line (verbatim)
+    cur_task: str | None = None           # eval: name of the last generated task (cleaned)
+    gen_tokens: int | None = None         # eval: cumulative generated tokens (sum of new=)
+    eval_compiling: bool = False          # eval: `running tsc` seen (compile/score stage)
+    eval_score: float | None = None       # eval: final SCORE g (from "SCORE g/max = pct%")
+    eval_max: int | None = None           # eval: final SCORE max (task count)
+    eval_pct: float | None = None         # eval: final percentage
+    eval_clean: int | None = None         # eval: clean-compile count (from "CLEAN n/max")
 
     # Raw display strings, preserved verbatim from the log for byte-exact render
     # parity (the log may carry high precision like "1.9119" / "471.0" that a float
@@ -140,6 +148,8 @@ class MemoryStats:
     ram_free_gb: float | None = None
     swap_used_gb: float | None = None
     gtt_rate_mb_s: float | None = None    # derived over the tick delta (state/loop)
+    gpu_busy_pct: int | None = None       # amdgpu gpu_busy_percent (utilization %), read
+                                          # from the same card as GTT — instantaneous, no delta
 
 
 @dataclass
@@ -176,11 +186,118 @@ class ClockStats:
 
 
 @dataclass
+class DiskStat:
+    """Filesystem usage for one configured mount (collectors/disk.py, Phase 5).
+
+    Sourced from ``os.statvfs`` ONLY — free-block counters the kernel already
+    caches, so probing is essentially zero-I/O and never competes with a running
+    training job for disk bandwidth (C2 invariant: no ``du``, no directory walk,
+    no file-content reads).
+
+    ``free_bytes`` is the space available to an unprivileged user (``f_bavail``),
+    i.e. what the dashboard reports as "free". ``used_bytes``/``used_pct`` are
+    against the full capacity (``f_blocks``), so ``free + used`` need not equal
+    ``total`` (the reserved-block gap). ``present`` is False when the mount could
+    not be stat'd (unmounted / absent removable drive) — the renderer shows it as
+    unavailable rather than crashing. ``low`` is the threshold verdict computed by
+    the collector from the config warning limits.
+    """
+
+    path: str
+    label: str | None = None          # display label; falls back to path
+    total_bytes: int | None = None
+    free_bytes: int | None = None     # available to unprivileged user (f_bavail)
+    used_bytes: int | None = None
+    used_pct: int | None = None       # used / total, rounded (awk %.0f parity)
+    low: bool = False                 # free below a configured warning threshold
+    present: bool = False             # mount was stat'd successfully
+
+
+@dataclass
+class RawNetIface:
+    """Raw, *stateless* per-interface byte counters (collectors/network.py, Phase 5).
+
+    The counters are the kernel's own cumulative-since-boot totals read straight
+    from ``/sys/class/net/<name>/statistics/{rx,tx}_bytes`` — reading them costs no
+    packet capture and never touches the wire (C2 invariant). Turning the counter
+    delta into a throughput rate, and computing session totals, is ``loop.py``'s
+    job (DESIGN §2.2 F); this collector keeps NO previous-sample reference.
+
+    ``present`` is False when the interface's statistics could not be read (iface
+    absent / renamed / permission) — reported as unavailable, never as an error.
+    """
+
+    name: str
+    label: str | None = None         # display label; falls back to name (renderer)
+    rx_bytes: int | None = None      # cumulative received bytes (since boot)
+    tx_bytes: int | None = None      # cumulative transmitted bytes (since boot)
+    present: bool = False
+
+
+@dataclass
+class NetStat:
+    """Per-interface network throughput for one active interface (Phase 5).
+
+    Derived by ``loop.py`` from two successive :class:`RawNetIface` samples: the
+    download/upload *rates* are the byte-counter delta over the tick interval, and
+    the session totals are the counter's growth since the monitor started. A
+    counter reset/wraparound (negative delta) yields ``None`` for that rate this
+    tick, matching the RAPL-watts wraparound handling. ``present`` mirrors the raw
+    reading so the renderer shows a missing interface as unavailable.
+    """
+
+    name: str
+    label: str | None = None          # display label; falls back to name
+    rx_mb_s: float | None = None      # download rate over the tick (MB/s)
+    tx_mb_s: float | None = None      # upload rate over the tick (MB/s)
+    rx_session_bytes: int | None = None  # cumulative received since monitor start
+    tx_session_bytes: int | None = None  # cumulative transmitted since monitor start
+    present: bool = False
+
+
+class EvalPhase(str, Enum):
+    """Sub-stage of an eval/grading run, for the additive Eval widget (Phase 5)."""
+
+    GENERATING = "generating"   # decoding heldout tasks (task N/total, tok/s)
+    COMPILING = "compiling"     # tsc compile+score of the generated files
+    FINISHED = "finished"       # done — final SCORE available
+
+
+@dataclass
+class EvalProgress:
+    """Detailed progress of an eval/grading job for the additive Eval widget (Phase 5).
+
+    Assembled by ``loop.py`` from the parsed :class:`JobState` PLUS loop-observed
+    timing (the eval script prints no per-line timestamps, so throughput/ETA can only
+    be observed across ticks — same reason GTT-rate/watts/net-rate live in the loop).
+
+    ``tok_s`` is an *observed average* over the generation window the monitor actually
+    watched; it is ``None`` when generation was already underway on the first tick (we
+    can't honestly measure a rate we didn't see start). ``eta_note`` marks the ETA as
+    rough/observed or "still estimating" per the "불확정이면 그렇게 표기" requirement.
+    """
+
+    label: str | None = None            # eval run label (--label) or unit name
+    done: int | None = None             # tasks generated so far
+    total: int | None = None            # heldout total (e.g. 7)
+    cur_task: str | None = None         # last generated task name
+    phase: EvalPhase = EvalPhase.GENERATING
+    tok_s: float | None = None          # observed avg throughput (loop); None if unmeasurable
+    eta_s: int | None = None            # observed ETA seconds (generation-scoped)
+    eta_note: EtaNote | None = None     # rough/observed vs estimating
+    score: float | None = None          # final SCORE g (when finished)
+    max: int | None = None              # final SCORE max
+    pct: float | None = None            # final percentage
+    clean: int | None = None            # clean-compile count
+
+
+@dataclass
 class Flags:
     """Alert/threshold flags computed from a Snapshot (alerts.py, Phase 5)."""
 
     ram_low: bool = False
     has_error: bool = False
+    disk_low: bool = False            # any configured mount below its free threshold
 
 
 @dataclass
@@ -194,4 +311,7 @@ class Snapshot:
     memory: MemoryStats = field(default_factory=MemoryStats)
     power: PowerStats = field(default_factory=PowerStats)
     clocks: ClockStats = field(default_factory=ClockStats)
+    disks: list[DiskStat] = field(default_factory=list)
+    net: list[NetStat] = field(default_factory=list)
+    eval: EvalProgress | None = None       # present only for an active eval/grading job
     flags: Flags = field(default_factory=Flags)

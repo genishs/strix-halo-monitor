@@ -5,8 +5,179 @@
 
 ## [Unreleased]
 
-Phase 5(확장) 예정 — nvidia 백엔드(이슈 #5), 스파크라인, alerts, TOML 설정, `--rich`/`--ascii` 렌더 선택,
-차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임. 아직 커밋된 변경 없음.
+Phase 5(확장) 남은 항목 — nvidia 백엔드(이슈 #5), 스파크라인, alerts(규칙 일반화), TOML 설정,
+`--rich`/`--ascii` 렌더 선택, 차분 렌더, ML 스크립트 O4 emit(72B 파이프라인 종료 후), `amdgpu_w`→`gpu_w` 리네임.
+로그 `[HH:MM:SS]` 타임스탬프 기반 epoch 산정은 여전히 회피(tz 함정).
+
+## [0.7.0] — 2026-08-04
+
+**디스크 위젯이 마운트된 디스크를 다 못 보여주던 버그 수정** (하드코딩 목록 → 자동탐지).
+
+### Fixed
+- **🔴 외장 2개 중 1개만 표시**: 디스크 위젯이 `config.DEFAULT_DISK_MOUNTS`에 **하드코딩된 3개**
+  (`/mnt/data`, `/run/media/user/새 볼륨`, `/`)만 봤다. 개수 제한 코드가 있었던 게 아니라 **목록에 없는
+  마운트는 존재 자체가 보이지 않았다** — 실제로 마운트된 `/run/media/user/새 볼륨1`(1.9T)이 통째로 누락.
+  이제 기본값이 **자동탐지**다: `/proc/mounts`를 읽어 실제 마운트된 파일시스템 전부를 표시한다.
+  실측 결과 4개(`/mnt/data` 701G, `새 볼륨` 932G, `새 볼륨1` 1.9T, `/` 210G) 모두 나온다.
+- **컬럼 정렬 깨짐**: 사용량 칸이 고정폭(`:>5`)이라 1.9T 드라이브의 4자리 값(`1422.1`)이 칸을 넘쳐
+  그 줄부터 막대·퍼센트·여유 칸이 밀렸다. 자릿수를 **프레임마다 계산**해 정렬(라벨 정렬과 같은 방식).
+  자동탐지로 TB급 드라이브가 처음 표시되면서 드러난 문제.
+
+### Added
+- **마운트 자동탐지(`collectors/mounts.py`)** — `/proc/mounts` 파싱. `\040` 이스케이프를 디코드하므로
+  **공백 포함 경로**(`새 볼륨1`)가 정확히 처리된다. 노이즈 제외: `tmpfs`/`devtmpfs`/`squashfs`(snap loop)/
+  `overlay` 등 의사 파일시스템, `/boot/efi`, `/proc|/sys|/dev|/snap|/run`(단 `/run/media`는 **유지**).
+  네트워크 FS(nfs/cifs/sshfs…)도 제외 — 끊긴 마운트에 `statvfs`가 걸리면 TUI 전체가 멎기 때문.
+  같은 블록장치의 bind mount 중복 제거. 라벨은 이동식=볼륨 폴더명(`새 볼륨1`), 고정=경로 그대로.
+  표시 순서는 기존과 동일하게 고정 → 이동식 → `/` 마지막.
+- **드라이브 착탈 대응** — 탐지 결과를 `HALO_DISK_RESCAN_S`(기본 5초)마다 갱신. 실행 중 외장을 꽂거나
+  빼면 재시작 없이 반영된다. 매 틱(~2초) 재탐지를 피하는 캐시일 뿐이라 C2(무간섭) 유지.
+- **개수 상한** — `HALO_DISK_MAX`(기본 8). 초과 시 **용량 큰 순**으로 남겨 화면이 무너지지 않게 한다.
+  상한 미만이면 표시 순서 그대로. **명시 목록(`HALO_DISK_MOUNTS`)에는 상한을 적용하지 않는다**
+  (사용자가 이름을 대서 지정한 것이므로 전부 표시).
+- **테스트 +41** — 이스케이프 디코드, 파싱, 제외필터(의사FS·snap·EFI·gvfs·네트워크FS), bind 중복제거,
+  라벨·정렬 규칙, 착탈(장착·탈거·캐시 유효기간), 상한, 컬럼 정렬, 하위호환(명시 목록 우선·상한 미적용).
+
+### Changed
+- **`Config.disk_mounts` 기본값이 `None`(자동탐지 신호)** — `net_ifaces`와 같은 규약. `()`(빈 튜플)은
+  종전대로 위젯 비활성, 비어있지 않은 튜플은 종전대로 그 목록만. **`HALO_DISK_MOUNTS`의 기존 동작
+  (`;` 구분 `label=path`, 공백 포함 경로 포함)은 그대로**다.
+- `config.DEFAULT_DISK_MOUNTS` 상수 제거(이 상수가 곧 버그였다). 기존 테스트
+  `test_default_mounts_present`는 하드코딩 목록을 단언하던 것이라, 같은 보장(`/mnt/data`·`/`가 나온다)을
+  실제로 결정하는 계층(탐지)에서 검증하도록 `test_default_is_auto_discovery` + 탐지 테스트로 대체했다.
+
+### Notes
+- C2(무간섭) 유지: `statvfs` + `/proc/mounts`(커널 메모리상 텍스트)만 읽는다. `df`·`lsblk` 서브프로세스
+  없음 — 비용 문제만이 아니라, 공백 포함 경로를 셸에 태우는 것이 이 프로젝트에서 반복된 함정이라서다.
+
+## [0.6.1] — 2026-07-31
+
+**모델정보 줄 모델명이 "새"로만 나오는 버그 수정** (공백 포함 `--base` 경로 파싱).
+
+### Fixed
+- **🔴 모델명 "새"**: 학습/채점 유닛 커맨드의 `--base` 값이 `/run/media/user/새 볼륨/<model>`(공백 포함
+  경로)인데, 모델정보 파서가 값을 `\S+`(공백 없는 런)로 잡아 **첫 공백에서 잘려** basename이 `새`가 됐다.
+  정답은 마지막 경로요소(예: `mistral-large-2411` → `Mistral-Large 123B`, `mixtral-8x22b-v0.1`).
+  경로형 옵션(`--base`·`--adapter`)의 값을 **다음 `" --플래그"`(또는 줄끝)까지 통째로** 취득하도록 수정
+  (`modelinfo._PATH_VALUE`). 숫자/식별자 옵션은 단일 토큰 그대로. legacy `monitor.sh`도 `sed`로 동일 수정
+  (`--base` 뒤 → ` --` 앞까지). eval 위젯의 `--label` 우선 라벨은 그대로(중복 방지책이었을 뿐, 이제 근본 수정).
+- **테스트 +3** — 공백 경로 `--base`(중간·줄끝), 공백 경로 `--adapter`. 기존 파싱 케이스 전부 유지.
+
+### Notes
+- 이 파서는 로그의 `command` 줄만 읽는다(읽기전용, C2 무간섭). systemd 접근 불필요.
+- 렌더 레이아웃/골든 프레임 영향 없음(모델명 문자열만 정확해짐).
+
+## [0.6.0] — 2026-07-31
+
+**Phase 5 확장(4) — GPU 사용율(utilization %) 표시** (task #24 연장). 기존 지표는 무변경.
+
+### Added
+- **GPU 사용율** — `/sys/class/drm/card*/device/gpu_busy_percent`(amdgpu 커널 카운터)를 **GTT를 읽는
+  그 카드에서 함께** 읽어 GTT 줄 끝에 `GPU 사용 62%`(EN `GPU busy 62%`)로 표시. 순간값(델타 불요),
+  **읽기전용·간섭 0(C2)**. `AmdgpuBackend.mem_info()`가 `MemoryStats.gpu_busy_pct`로 채우고
+  `MemoryCollector`가 통과시킴. 커널/카드에 파일이 없으면 `None`(우아한 공백).
+- **렌더(`ui/`)** — GTT 줄에 **값이 있을 때만** 사용율을 덧붙임(가산적) → gpu_busy_pct 없는 골든
+  픽스처의 **바이트 파리티 프레임 무변경**. i18n 한/영(`GPU 사용`/`GPU busy`).
+- **테스트 +4** — 백엔드(사용율 읽기·부재시 None), 메모리 수집기(통과), 렌더(GTT 줄 덧붙임 ko/en·부재시 무변경).
+- **legacy `monitor.sh`** — 동일: `gpu_busy_percent`를 읽어 GTT 줄 끝에 값 있을 때만 표시. 수치·포맷 Python과 일치.
+- **테스트 픽스처** — `tests/fixtures/sysfs/.../card1/device/gpu_busy_percent`(62) 추가. `sysfs_no_rapl`엔
+  일부러 없음(부재 경로 검증).
+
+### Notes
+- **sclk**: 클럭은 기존대로 별도 줄(`sclk: NMhz`)에 이미 표시 중이라 중복 없이 그대로 뒀다(요청의 "여유되면 참고").
+- 사용율은 순간 카운터라 틱마다 크게 변동한다(정상). GTT rate/watts처럼 델타를 쓰지 않는다.
+
+## [0.5.0] — 2026-07-31
+
+**Phase 5 확장(3) — 채점(eval/grading) 진행 표시 + 라우팅 버그 수정** (task #24 연장). 기존 지표는 무변경.
+
+### Fixed
+- **🔴 채점 유닛 오라우팅**: `ScoreParser.matches()`가 유닛명에 `score`만 확인 → 현재 도는
+  `gpujob-grade141b-*`(개조된 `eval_hard_tsc.py`)가 **학습 파서로 오라우팅**돼 `🔧 양자화`에 멈춘 채
+  채점 진행이 **안 보였다**. 매칭을 `score`/`grade`/`eval` 별칭 전체로 확장해 해결. legacy `monitor.sh`의
+  `case *score*` 도 `*score*|*grade*|*eval*` 로 동일 수정.
+
+### Added
+- **eval 상세 스크레이프(`_scrape.eval_progress`)** — 현재/최근 태스크명, 누적 생성 토큰(`new=` 합),
+  컴파일·채점 단계(`running tsc`), 최종 결과(`CLEAN n/m`, `SCORE g/max = pct%`, `saved →`)를 로그에서 추출.
+  기존 `generated [` 카운팅(구·신 포맷 공통)은 그대로. **로그 읽기 전용 → 도는 채점·다운로드 무간섭(C2)**.
+- **관측 기반 처리량·ETA(`loop.py`)** — eval 로그엔 per-line 타임스탬프가 없어 tok/s·ETA를 **루프가 틱 간
+  관측**(GTT rate·watts·net rate와 동일 소유권). throughput = 누적토큰/관측 생성경과(**0태스크에서 관측
+  시작했을 때만** 표시 — 못 본 구간을 나눠 과대추정하지 않도록, 아니면 `—`). ETA = 관측 생성경과 × 남은/완료
+  태스크(생성단계 스코프 — 유닛 전체 경과가 아니라 88분 양자화를 제외). "관측/rough" 또는 "산정 대기"로 표기.
+  관측 ETA는 main ETA 라인에도 반영해 위젯과 일치.
+- **모델(`model.py`)** — `EvalProgress` dataclass + `EvalPhase`(generating/compiling/finished) + `Snapshot.eval`.
+  `JobState`에 `cur_task`·`gen_tokens`·`eval_compiling`·`eval_score/max/pct/clean`, `ModelInfo`에 `eval_label`(`--label`).
+- **렌더(`ui/`)** — `widgets.eval_lines` + `render` **가산적** 평가 섹션(`Snapshot.eval` 있을 때만; 학습·골든
+  프레임 무영향, 디스크·네트워크 뒤). **표준 ML 평가 용어**: `task N/7`, `tok/s`, `ETA (관측/observed)`, `score`.
+  i18n 한/영. `smodel`은 `--label`(eval 실행명) 우선 → base_label 잘림("새") 회피. main 진행줄 `최근:`도 태스크명 사용.
+- **테스트 +15** — `test_eval_widget.py`(파서 상세·라우팅·루프 관측 tok/s·ETA·from-zero 가드·유닛변경 리셋·
+  finished·가산 렌더 ko/en), `test_score_parser.py`에 grade/eval 라우팅 회귀.
+- **legacy `monitor.sh`** — 라우팅 수정 + `--label` 우선 표시 + 관측 tok/s(0태스크 관측 가드) + `task N/7`·현재
+  태스크명 + 종료 시 최종 SCORE. 로그 읽기만.
+
+### Notes
+- **채점=평가=eval 동일 잡**: 유닛명이 `score`→`grade`로 표류했을 뿐 `eval_hard_tsc.py` 동일. 배치 디코드
+  (`--batch-size`)로 태스크가 버킷 단위로 완료돼 `task N/7`은 버킷 크기만큼 점프한다(버스티). 그래서 tok/s는
+  순간 델타가 아닌 **관측 평균**으로 계산(정직·평활).
+
+## [0.4.0] — 2026-07-30
+
+**Phase 5 확장(2) — 네트워크 처리량(다운로드/업로드 속도) 위젯 추가** (task #24 연장). 기존 지표는 무변경.
+
+### Added
+- **네트워크 수집기 `collectors/network.py`** — 활성 인터페이스별 RX/TX 바이트 카운터를 수집.
+  **`/sys/class/net/<iface>/statistics/{rx,tx}_bytes` 커널 카운터만 읽기** — 패킷 캡처·`tcpdump`·소켓·외부호출
+  전무. 틱당 네트워크 I/O ≈ 0이라 도는 학습/채점이나 대용량 모델 다운로드의 링크와 경합하지 않는다(**C2 불변식**).
+  인터페이스 부재/개명/권한 시 예외 없이 `present=False`(사용불가)로 우아 강등. 인터페이스 해석(자동감지)도
+  주입된 루트의 sysfs/procfs만 읽어 테스트 결정적.
+- **인터페이스 자동감지** — 미지정 시 기본경로(default route) 인터페이스를 `/proc/net/route`에서 감지
+  (`net_auto="default"`, 없으면 모든 비-loopback으로 폴백), `net_auto="all"`이면 모든 비-loopback.
+- **속도·세션 누적(`loop.py`)** — 속도 = 카운터 델타 / 경과시간. **직전 카운터·최초 카운터를 루프가 상태로 보관**
+  (GTT rate·RAPL watts와 동일 소유권 모델). 카운터 리셋(음수 델타)은 그 틱 속도 `None`(RAPL 랩어라운드와 동일 처리).
+  세션 누적 RX/TX = 모니터 시작 이후 증가분.
+- **설정(`config.py`)** — `NetTarget`(이름+라벨) + `net_ifaces`(None=자동, `()`=끔, 명시=지정) + `net_auto`.
+  환경변수 `HALO_NET_IFACES`(`라벨=이름;...`, 빈 값=끔)·`HALO_NET_AUTO`(`default`|`all`). 기존 `HALO_*` 하위호환 유지.
+- **모델(`model.py`)** — `RawNetIface`(raw 카운터, stateless) + `NetStat`(파생: 속도·세션누적) + `Snapshot.net`.
+- **렌더(`ui/`)** — `widgets.net_lines`(라벨 열 표시폭 정렬, `↓`/`↑` 화살표) + `render`에 네트워크 섹션(구분선 +
+  인터페이스별 줄). **가산적**: `Snapshot.net`이 비면 섹션 미출력 → 기존 12줄 골든 프레임(바이트 파리티)·디스크
+  블록 그대로 통과. 디스크 블록 **뒤에** 배치. i18n 한/영(`네트워크`/`Network`, `누적`/`total`, `사용불가`/`unavailable`).
+- **테스트 +25** — `test_network_collector.py`(임시 sysfs/procfs 트리로 명시·자동감지(기본경로/all)·카운터읽기·부재·
+  설정파싱), `test_network_render.py`(줄 포맷·가산성·디스크 뒤 배치·부재·정렬), `test_loop.py`에 네트워크
+  델타(2샘플 필요·카운터리셋 skip·세션누적·부재통과·수집기 예외 복원력).
+- **legacy `monitor.sh`** — 동일 네트워크 섹션 추가(`/sys/class/net/*/statistics` 카운터 델타). 수치·포맷 Python과 일치.
+
+### Notes
+- **Python↔bash 미세차(의도, 디스크와 동일)**: 라벨 정렬을 Python은 **표시폭**(CJK 2칸), bash는 문자수로 패딩.
+  인터페이스명은 통상 ASCII라 실무상 동일하게 정렬된다. 수치·화살표·레이아웃 골격은 동일.
+- 자동감지는 `/proc/net/route`(기본경로)·`/sys/class/net`(비-loopback 목록) 전제 — 대상 박스는 Linux.
+
+## [0.3.0] — 2026-07-30
+
+**Phase 5 확장(1) — 디스크 사용율·여유공간·부족경고 위젯 추가** (task #24). 기존 지표는 무변경.
+
+### Added
+- **디스크 수집기 `collectors/disk.py`** — 대상 마운트별 사용율%·여유공간(GiB)·총량을 수집.
+  **`os.statvfs()` 만 사용**(커널이 캐시하는 여유블록 카운터) — `du`·디렉토리 재귀·파일읽기 전무.
+  틱당 디스크 I/O 사실상 0이라 도는 학습/채점의 스토리지 대역과 경합하지 않는다(**C2 불변식**).
+  마운트 미착탈/부재 시 예외 없이 `present=False`(사용불가)로 우아 강등. `os.statvfs`는 주입 가능(테스트).
+- **경고 임계** — 여유공간이 `disk_warn_free_gb`(기본 10GiB) 미만 **또는** `disk_warn_free_pct`(기본 5%)
+  미만이면 `⚠️위험`/`⚠️LOW` 마커. 순수함수 `disk.is_low()`로 분리해 단위테스트.
+- **설정(`config.py`)** — `DiskTarget`(경로+라벨) + `disk_mounts`(기본: `/mnt/data`·외장모델
+  `/run/media/user/새 볼륨`·`/`) + 두 임계. 환경변수 `HALO_DISK_MOUNTS`(`라벨=경로;...`, 경로 공백 허용,
+  빈 값=끔)·`HALO_DISK_WARN_GB`·`HALO_DISK_WARN_PCT`. 기존 `HALO_*` 하위호환 유지.
+- **모델(`model.py`)** — `DiskStat` dataclass + `Snapshot.disks` + `Flags.disk_low`(any 마운트 경고).
+- **렌더(`ui/`)** — `widgets.disk_lines`(라벨 열을 **표시폭 기준** 정렬, CJK 2칸 처리) + `render`에
+  디스크 섹션(구분선+마운트별 줄). **가산적**: `Snapshot.disks`가 비면 섹션 미출력이라 기존 12줄
+  골든 프레임(바이트 파리티)은 그대로 통과. i18n 한/영(`디스크`/`Disk`, `여유`/`free`, `사용불가`/`unavailable`).
+- **테스트 +25** — `test_disk_collector.py`(statvfs 모킹으로 사용율·여유·경고 임계·부재·설정파싱),
+  `test_disk_render.py`(줄 포맷·경고마커·부재표시·가산성·열 정렬), `test_loop.py`에 disk 통과·플래그·복원력.
+- **legacy `monitor.sh`** — 동일 디스크 섹션 추가(`df -B1`=statvfs, du·재귀 없음). 수치는 Python과 동일.
+
+### Notes
+- **Python↔bash 미세차(의도)**: 라벨 정렬을 Python은 **표시폭**(CJK 2칸), bash는 문자수로 패딩 →
+  한글 라벨이 섞이면 콜론 정렬이 bash에서 약간 어긋난다. 수치·경고·레이아웃 골격은 동일. (DEVLOG Phase 5 참조)
+- `df --output`은 GNU coreutils 전제(기존 `date -d`/`free -m`와 동일 전제). 대상 박스는 Linux.
 
 ## [0.2.1] — 2026-07-18
 
