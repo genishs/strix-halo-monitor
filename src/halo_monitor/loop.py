@@ -24,7 +24,7 @@ from .collectors.backends.base import GpuBackend
 from .config import Config
 from .model import (
     BatteryStat, ClockStats, DiskStat, EtaNote, EvalPhase, EvalProgress, Flags, JobState,
-    JobType, MemoryStats, NetStat, Phase, PowerStats, RawNetIface, RawPower, Snapshot,
+    JobType, MemoryStats, NetStat, Phase, PowerStats, RawNetIface, RawPower, Snapshot, TempStat,
 )
 
 # A job provider hides systemd detection + parsing behind one call so the loop stays
@@ -55,6 +55,7 @@ class UpdateLoop:
         disk: Collector,
         network: Collector,
         battery: Collector,
+        temperature: Collector | None = None,
         job_provider: JobProvider,
         renderer: Renderer,
     ) -> None:
@@ -66,6 +67,7 @@ class UpdateLoop:
         self.disk = disk
         self.network = network
         self.battery = battery
+        self.temperature = temperature
         self.job_provider = job_provider
         self.renderer = renderer
 
@@ -248,6 +250,10 @@ class UpdateLoop:
         raw_net: list[RawNetIface] = _safe(lambda: self.network.collect(self.ctx), [])
         net = self._net_stats(raw_net, dt)
         battery: BatteryStat = _safe(lambda: self.battery.collect(self.ctx), BatteryStat())
+        temps: list[TempStat] = (
+            _safe(lambda: self.temperature.collect(self.ctx), [])
+            if self.temperature is not None else []
+        )
         job: JobState | None = _safe(lambda: self.job_provider(now_wall), None)
         eval_progress = _safe(lambda: self._eval_progress(job, now_wall), None)
 
@@ -256,6 +262,7 @@ class UpdateLoop:
             has_error=bool(job and job.error_count),
             disk_low=any(d.low for d in disks),
             battery_low=(battery.alert != "ok"),
+            temp_hot=any(t.alert != "ok" for t in temps),
         )
         return Snapshot(
             ts=now_wall,
@@ -268,6 +275,7 @@ class UpdateLoop:
             net=net,
             eval=eval_progress,
             battery=battery,
+            temps=temps,
             flags=flags,
         )
 

@@ -11,6 +11,7 @@ from halo_monitor.config import config_from_env
 from halo_monitor.loop import UpdateLoop
 from halo_monitor.model import (
     BatteryStat, ClockStats, DiskStat, JobState, JobType, MemoryStats, RawNetIface, RawPower,
+    TempStat,
 )
 
 
@@ -29,7 +30,7 @@ class _Fake:
         return v
 
 
-def make_loop(mem, raw, clk, job=None, disks=None, net=None, battery=None):
+def make_loop(mem, raw, clk, job=None, disks=None, net=None, battery=None, temps=None):
     cfg = config_from_env(env={})
     return UpdateLoop(
         cfg,
@@ -40,6 +41,7 @@ def make_loop(mem, raw, clk, job=None, disks=None, net=None, battery=None):
         disk=_Fake([] if disks is None else disks),
         network=_Fake([] if net is None else net),
         battery=_Fake(BatteryStat() if battery is None else battery),
+        temperature=None if temps is None else _Fake(temps),
         job_provider=lambda now: job,
         renderer=lambda snap: None,
     )
@@ -129,6 +131,37 @@ class TestLoopDeltas(unittest.TestCase):
         snap = loop.tick(0.0, 1000.0)                        # must not raise
         self.assertFalse(snap.battery.present)               # blank default for the tick
         self.assertFalse(snap.flags.battery_low)
+
+    def test_no_temperature_collector_wired_yields_empty_temps(self):
+        # temperature is an optional collaborator (default None) so existing
+        # UpdateLoop construction sites don't need updating for this feature.
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats())
+        snap = loop.tick(0.0, 1000.0)
+        self.assertEqual(snap.temps, [])
+        self.assertFalse(snap.flags.temp_hot)
+
+    def test_temp_passthrough_and_flag_ok(self):
+        temps = [TempStat(key="gpu", label="GPU", temp_c=88.0, warn_c=95.0, crit_c=105.0, alert="ok")]
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), temps=temps)
+        snap = loop.tick(0.0, 1000.0)
+        self.assertIs(snap.temps, temps)
+        self.assertFalse(snap.flags.temp_hot)
+
+    def test_temp_warn_and_crit_set_the_flag(self):
+        for alert in ("warn", "crit"):
+            temps = [TempStat(key="gpu", label="GPU", temp_c=100.0,
+                               warn_c=95.0, crit_c=105.0, alert=alert)]
+            loop = make_loop(MemoryStats(), RawPower(), ClockStats(), temps=temps)
+            snap = loop.tick(0.0, 1000.0)
+            self.assertTrue(snap.flags.temp_hot, alert)
+
+    def test_temp_collector_raising_is_survived(self):
+        temps = [TempStat(key="gpu", label="GPU", temp_c=88.0, warn_c=95.0, crit_c=105.0)]
+        loop = make_loop(MemoryStats(), RawPower(), ClockStats(), temps=temps)
+        loop.temperature = _Fake(RuntimeError("hwmon boom"))
+        snap = loop.tick(0.0, 1000.0)                        # must not raise
+        self.assertEqual(snap.temps, [])                     # blank for the tick
+        self.assertFalse(snap.flags.temp_hot)
 
 
 class TestNetDeltas(unittest.TestCase):

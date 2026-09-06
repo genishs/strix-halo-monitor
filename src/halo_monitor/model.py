@@ -291,6 +291,36 @@ class BatteryStat:
     alert: str = "ok"                   # "ok" | "warn" | "crit" — collectors/battery.py
 
 
+@dataclass
+class TempStat:
+    """One temperature-sensor reading (collectors/temperature.py, Phase 7).
+
+    Identified by hwmon ``name`` file content (``amdgpu`` / ``k10temp`` / ``nvme``)
+    and, within that chip, by ``temp*_label`` text (e.g. amdgpu's ``edge`` vs
+    ``junction``/``mem``; nvme's ``Composite`` vs ``Sensor1``/``Sensor2``) — never by
+    hwmon or ``tempN`` number, both of which renumber across boots/boxes (same
+    auto-detect principle as ``collectors/mounts.py`` / ``collectors/battery.py``).
+    A sensor this box doesn't have (e.g. no discrete GPU, no k10temp CPU) is simply
+    absent from ``Snapshot.temps`` — there is no ``present=False`` placeholder row,
+    unlike ``DiskStat``/``NetStat`` which track *configured* targets that can go
+    missing at runtime; a temperature sensor set is fixed for the life of the process.
+
+    ``warn_c``/``crit_c`` are *this reading's own* resolved thresholds: the chip's
+    own ``temp*_max``/``temp*_crit`` sysfs limit when that value is sane (0-150°C),
+    else the configured default for this sensor's class. Some drives report obvious
+    garbage here (observed on this box: an NVMe ``temp2_max`` of 65261°C, an
+    overflowed sentinel) — used unfiltered, the alert could never fire. See
+    ``collectors/temperature.py: _sane_threshold``.
+    """
+
+    key: str                    # stable id: "gpu" | "cpu" | "nvme" | "nvme1" | "nvme2" | ...
+    label: str                  # display label: "GPU" | "CPU" | "NVMe" | "NVMe1" | ...
+    temp_c: float | None = None
+    warn_c: float = 0.0
+    crit_c: float = 0.0
+    alert: str = "ok"           # "ok" | "warn" | "crit" — collectors/temperature.py
+
+
 class EvalPhase(str, Enum):
     """Sub-stage of an eval/grading run, for the additive Eval widget (Phase 5)."""
 
@@ -335,6 +365,7 @@ class Flags:
     has_error: bool = False
     disk_low: bool = False            # any configured mount below its free threshold
     battery_low: bool = False         # battery alert is "warn" or "crit" (Phase 6)
+    temp_hot: bool = False            # any sensor's alert is "warn" or "crit" (Phase 7)
 
 
 @dataclass
@@ -352,4 +383,5 @@ class Snapshot:
     net: list[NetStat] = field(default_factory=list)
     eval: EvalProgress | None = None       # present only for an active eval/grading job
     battery: "BatteryStat" = field(default_factory=lambda: BatteryStat())
+    temps: list[TempStat] = field(default_factory=list)   # Phase 7
     flags: Flags = field(default_factory=Flags)

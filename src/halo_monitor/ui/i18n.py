@@ -68,6 +68,9 @@ _LABELS: dict[str, tuple[str, str]] = {
     "battery_remaining": ("잔여", "remaining"),
     "battery_warn": ("낮음", "LOW"),
     "battery_crit": ("위험", "CRITICAL"),
+    "temp": ("온도", "Temp"),
+    "temp_warn": ("높음", "HIGH"),
+    "temp_crit": ("위험", "CRITICAL"),
 }
 
 _NOTE: dict[EtaNote, tuple[str, str]] = {
